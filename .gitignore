@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+data/sec_tickers.json
+.env

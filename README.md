@@ -50,8 +50,8 @@ Float غير متوفر مجاناً بشكل موثوق، فلا نقدّره: 
    | `TELEGRAM_CHAT_ID` | رقم المحادثة |
    | `SEC_USER_AGENT` | اسمك وبريدك، مثل: `Rayan rayan@example.com` (SEC تشترط ذلك) |
 5. **صلاحية الحفظ:** Settings ← Actions ← General ← Workflow permissions ← **Read and write permissions** ← Save.
-6. **الموقع (للمستودع العام):** Settings ← Pages ← Source: Deploy from a branch ← Branch: `main` ومجلد `/docs` ← Save.
-   الرابط يظهر بعد دقيقة: `https://اسمك.github.io/اسم-المستودع/`
+6. **الموقع (للمستودع العام):** Settings ← Pages ← Build and deployment ← Source: **GitHub Actions** (لا تختر Deploy from a branch).
+   النظام ينشر الموقع بنفسه بعد كل فحص. الرابط يظهر في نفس الصفحة بعد أول تشغيل: `https://اسمك.github.io/اسم-المستودع/`
 7. **تجربة فورية:** Actions ← headsup ← Run workflow. خارج الجلسة سيسجل «السوق مغلق» فقط — هذا طبيعي.
 
 لا تلصق المفاتيح في أي محادثة أو ملف. مكانها الوحيد هو GitHub Secrets.
