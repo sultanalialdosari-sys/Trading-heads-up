@@ -1,0 +1,18 @@
+{
+  "max_price": 5.0,
+  "min_price": 0.20,
+  "min_dollar_volume": 300000,
+  "max_day_change_pct": 25.0,
+  "min_rvol": 2.0,
+  "spike_mult": 3.0,
+  "window_bars": 12,
+  "max_range_atr": 3.0,
+  "max_range_pct": 8.0,
+  "near_res_min_pct": 0.5,
+  "near_res_max_pct": 5.0,
+  "max_spread_pct": 2.0,
+  "min_score": 65,
+  "shares_per_trade": 500,
+  "target_r": 2.0,
+  "slippage_pct": 0.5
+}
