@@ -1,40 +1,67 @@
 # -*- coding: utf-8 -*-
-"""يولّد موقعاً ثابتاً (docs/index.html) من قاعدة البيانات — يُنشر مجاناً على GitHub Pages."""
+"""يولّد موقعاً ثابتاً (docs/index.html) من قاعدة البيانات — يُنشر مجاناً على GitHub Pages.
+
+التصميم: «مكتب المراقبة» بخلفية بيضاء — رأس بالرصيد الافتراضي، منحنى الربح، مدار الوكلاء (مراحل الفحص
+بأرقام آخر تشغيل)، بطاقة الصفقة المميزة، وسجل الجلسة المباشر. كل الأرقام حقيقية من قاعدة البيانات.
+"""
 import html
 import json
-from datetime import datetime
-from typing import List
+import os
+from datetime import datetime, timedelta
+from typing import List, Optional
 
 import intraday as I
 from hu import rules as RL
 from hu import trades as TR
 
 E = lambda x: html.escape("" if x is None else str(x))
-STATE_AR = {"OPEN": ("🟡 مفتوحة", "#fbbf24"), "ACTIVATED": ("✅ تفعّلت", "#4ade80"), "INVALIDATED": ("❌ أُلغيت", "#f87171"),
-            "EXPIRED": ("⌛ انتهت بلا حسم", "#9da7b3")}
+LTR = lambda x: "\u2066" + str(x) + "\u2069"   # عزل الأرقام داخل النص العربي حتى لا تنقلب (+1.62R)
+GREEN, RED, BLUE, AMBER, GREY = "#16a34a", "#dc2626", "#2563eb", "#d97706", "#6b7380"
+STATE_AR = {"OPEN": ("مفتوحة", AMBER), "ACTIVATED": ("تفعّلت", GREEN), "INVALIDATED": ("أُلغيت", RED),
+            "EXPIRED": ("انتهت بلا حسم", GREY)}
 TSTAT = {"OPEN": "مفتوحة", "PENDING": "معلّقة", "STOP": "وقف", "TARGET": "هدف", "TIME": "نهاية المدة",
          "EXPIRED": "لم تُنفّذ", "CANCELLED": "أُلغيت قبل التنفيذ"}
 KIND = {"A": "A عند التنبيه", "B": "B عند الاختراق", "BASE": "مقارنة"}
+PARTS_MAX = [("الحجم", 30), ("التماسك", 35), ("الاتجاه", 20), ("الزخم", 5), ("الأخبار", 10)]
 
 
+# ------------------------------------------------------------------ أدوات
 def t_et(iso):
     if not iso:
         return "—"
-    d = datetime.fromisoformat(iso)
-    return d.astimezone(I.ET).strftime("%m-%d %H:%M")
+    return datetime.fromisoformat(iso).astimezone(I.ET).strftime("%m-%d %H:%M")
+
+
+def hm_et(iso):
+    return "—" if not iso else datetime.fromisoformat(iso).astimezone(I.ET).strftime("%H:%M")
 
 
 def money(v):
     return "—" if v is None else f"{'+' if v > 0 else ''}{v:,.2f}$"
 
 
-def sum_card(title: str, s: dict) -> str:
+def col(v):
+    return GREEN if (v or 0) > 0 else RED if (v or 0) < 0 else GREY
+
+
+def pill(text, cls):
+    return f"<span class='tag {cls}'>{E(text)}</span>"
+
+
+def table(head: List[str], rows: List[List[str]]) -> str:
+    if not rows:
+        return "<div class='empty'>لا شيء بعد.</div>"
+    th = "".join(f"<th>{h}</th>" for h in head)
+    tr = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<div class='tw'><table><thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table></div>"
+
+
+def sum_card(title: str, s: dict, accent: str) -> str:
     if not s.get("trades"):
         body = f"<div class='muted'>لا صفقات مغلقة بعد • مفتوحة {s.get('open', 0)}</div>"
     else:
-        col = "#4ade80" if s["total_pnl"] > 0 else "#f87171"
         avg_r = "—" if s["avg_r"] is None else f"{s['avg_r']:+.2f}"
-        body = (f"<div class='big' style='color:{col}'>{money(s['total_pnl'])}</div>"
+        body = (f"<div class='big mono' style='color:{col(s['total_pnl'])}'>{money(s['total_pnl'])}</div>"
                 f"<div class='kv'><span>الصفقات</span><b>{s['trades']}</b></div>"
                 f"<div class='kv'><span>نسبة الربح</span><b>{s['win_rate']:.0%}</b></div>"
                 f"<div class='kv'><span>متوسط الربح / الخسارة</span><b>{money(s['avg_win'])} / {money(s['avg_loss'])}</b></div>"
@@ -42,26 +69,273 @@ def sum_card(title: str, s: dict) -> str:
                 f"<div class='kv'><span>متوسط R</span><b>{avg_r}</b></div>"
                 f"<div class='kv'><span>أكبر تراجع</span><b>{money(s['max_drawdown'])}</b></div>"
                 f"<div class='kv'><span>لم تُنفّذ / مفتوحة</span><b>{s.get('not_filled', 0)} / {s['open']}</b></div>")
-    return f"<div class='card'><div class='ct'>{E(title)}</div>{body}</div>"
+    return f"<div class='card sc' style='--ac:{accent}'><div class='ct'>{E(title)}</div>{body}</div>"
 
 
-def table(head: List[str], rows: List[List[str]]) -> str:
-    if not rows:
-        return "<div class='muted' style='padding:14px'>لا شيء بعد.</div>"
-    th = "".join(f"<th>{h}</th>" for h in head)
-    tr = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
-    return f"<div class='tw'><table><thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table></div>"
+# ------------------------------------------------------------------ منحنى الربح
+def equity_html(trades: list) -> str:
+    closed = sorted([t for t in trades if t.get("pnl") is not None and t.get("exit_utc")], key=lambda t: t["exit_utc"])
+    series = {"A": [], "B": [], "BASE": []}
+    if not closed:
+        return ("<div class='eq'><svg viewBox='0 0 1000 200' preserveAspectRatio='none'>"
+                "<line x1='0' y1='150' x2='1000' y2='150' class='eqz'/></svg>"
+                "<div class='eqempty'>يظهر المنحنى بعد أول صفقة افتراضية مغلقة</div></div>")
+    run = {"A": 0.0, "B": 0.0, "BASE": 0.0}
+    for t in closed:
+        run[t["kind"]] = run.get(t["kind"], 0.0) + t["pnl"]
+        for k in series:
+            series[k].append(run[k])
+    vals = [0.0] + [v for s in series.values() for v in s]
+    lo, hi = min(vals), max(vals)
+    if hi - lo < 1e-9:
+        hi, lo = hi + 1, lo - 1
+    pad = (hi - lo) * 0.12
+    lo, hi = lo - pad, hi + pad
+    n = len(closed)
+    X = lambda i: 1000 * i / n
+    Y = lambda v: 200 - 200 * (v - lo) / (hi - lo)
+
+    def path(s):  # منحنى درجي: يبدأ من الصفر ويقفز عند كل إغلاق
+        d, prev = [f"M0,{Y(0):.1f}"], 0.0
+        for i, v in enumerate(s):
+            d.append(f"L{X(i + 1) - 1000 / n * 0.35:.1f},{Y(prev):.1f} L{X(i + 1):.1f},{Y(v):.1f}")
+            prev = v
+        return " ".join(d)
+
+    a = path(series["A"])
+    area = a + f" L1000,{Y(series['A'][-1]):.1f} L1000,200 L0,200 Z"
+    svg = (f"<svg viewBox='0 0 1000 200' preserveAspectRatio='none'>"
+           f"<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='{GREEN}' stop-opacity='.22'/>"
+           f"<stop offset='1' stop-color='{GREEN}' stop-opacity='0'/></linearGradient></defs>"
+           f"<line x1='0' y1='{Y(0):.1f}' x2='1000' y2='{Y(0):.1f}' class='eqz'/>"
+           f"<path d='{area}' fill='url(#g)'/>"
+           f"<path d='{path(series['BASE'])}' class='eqbase'/>"
+           f"<path d='{path(series['B'])}' class='eqb'/>"
+           f"<path d='{a}' class='eqa'/></svg>")
+    last = series["A"][-1]
+    tag = (f"<span class='eqtag' style='top:{Y(last) / 2:.1f}%;background:{col(last) if last else GREEN}'>{money(last)}</span>")
+    ticks = [closed[0], closed[len(closed) // 2], closed[-1]] if n > 2 else closed
+    axis = "".join(f"<span>{E(t_et(t['exit_utc']))}</span>" for t in ticks)
+    return f"<div class='eq'>{svg}{tag}</div><div class='eqx mono'>{axis}</div>"
 
 
+# ------------------------------------------------------------------ مدار الوكلاء
+ICONS = {
+    "radar": "<circle cx='12' cy='12' r='8'/><path d='M12 12 18 6'/><circle cx='12' cy='12' r='2'/>",
+    "filter": "<path d='M4 5h16l-6 7v6l-4 2v-8z'/>",
+    "candle": "<path d='M8 4v16M16 4v16'/><rect x='6' y='8' width='4' height='7'/><rect x='14' y='6' width='4' height='9'/>",
+    "shield": "<path d='M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6z'/><path d='m9 12 2 2 4-4'/>",
+    "news": "<rect x='4' y='4' width='16' height='16' rx='2'/><path d='M8 9h8M8 13h8M8 17h5'/>",
+    "gate": "<path d='M5 21V4M5 4h11l-2 4 2 4H5'/>",
+    "bell": "<path d='M6 16V11a6 6 0 0 1 12 0v5l2 2H4z'/><path d='M10 20a2 2 0 0 0 4 0'/>",
+    "wallet": "<path d='M4 17 9 11l4 3 7-8'/><path d='M15 6h5v5'/>",
+    "eye": "<path d='M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z'/><circle cx='12' cy='12' r='3'/>",
+    "search": "<circle cx='11' cy='11' r='6'/><path d='m20 20-4.5-4.5'/>",
+}
+
+
+def icon(name):
+    return (f"<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' "
+            f"stroke-linejoin='round'>{ICONS[name]}</svg>")
+
+
+def orbit_html(agents: list, core_big: str, core_sub: str, core_note: str) -> str:
+    import math
+    pills, lines = [], []
+    n = len(agents)
+    for i, (name, sub, metric, color, ic) in enumerate(agents):
+        ang = -math.pi / 2 + 2 * math.pi * i / n
+        x, y = 50 + 39 * math.cos(ang), 50 + 41 * math.sin(ang)
+        lines.append(f"<line x1='{x:.2f}' y1='{y:.2f}' x2='50' y2='50' data-i='{i}' style='--c:{color}'/>")
+        pills.append(f"<div class='ag' data-i='{i}' style='left:{x:.2f}%;top:{y:.2f}%;--c:{color}'>"
+                     f"<i>{icon(ic)}</i><div><b>{E(name)}</b><small>{E(sub)}</small></div><em class='mono'>{E(metric)}</em></div>")
+    return (f"<div class='orbit'><svg class='ol' viewBox='0 0 100 100' preserveAspectRatio='none'>{''.join(lines)}</svg>"
+            f"<div class='ring r1'></div><div class='ring r2'></div>"
+            f"<div class='core'><div class='cl'>{icon('radar')}</div><div class='cb mono'>{E(core_big)}</div>"
+            f"<div class='cs'>{E(core_sub)}</div></div>"
+            f"<div class='cnote' id='cnote'>{core_note}</div>"
+            f"{''.join(pills)}</div>")
+
+
+# ------------------------------------------------------------------ بطاقة الصفقة المميزة
+def focus_html(alerts: list, trades: list, cands: list) -> str:
+    tA = [t for t in trades if t["kind"] == "A"]
+    open_a = [t for t in tA if t["status"] in ("OPEN", "PENDING")]
+    t = open_a[0] if open_a else (tA[0] if tA else None)
+    al = next((a for a in alerts if t and a["id"] == t["alert_id"]), None) if t else (alerts[0] if alerts else None)
+    d = json.loads(al["data"]) if al and al.get("data") else None
+    if not t and not al:
+        if not cands:
+            return "<div class='empty'>لا صفقة ولا تنبيه بعد. تظهر هنا أحدث صفقة افتراضية مع مستوياتها.</div>"
+        c = cands[0]
+        d = json.loads(c["data"])
+        sym, head_tag = c["symbol"], pill("أعلى مرشح", "t-grey")
+        levels = [("إبطال", d.get("invalidation"), RED), ("السعر", d.get("price"), "#0f1419"), ("الاختراق", d.get("trigger"), BLUE)]
+        sub = f"الدرجة {c['score']} • لم يستوفِ كل القواعد بعد" if not c["qualifies"] else f"الدرجة {c['score']} • مؤهل"
+    else:
+        sym = (t or al)["symbol"]
+        if t:
+            st_txt = TSTAT.get(t["status"], t["status"])
+            cls = "t-green" if t["status"] == "TARGET" or (t["pnl"] or 0) > 0 else "t-red" if t["status"] == "STOP" or (t["pnl"] or 0) < 0 else "t-amber"
+            head_tag = pill(f"A • {st_txt}", cls)
+            levels = [("الوقف", t["stop"], RED), ("الدخول", t["entry"], "#0f1419"), ("الاختراق", t["trigger"], BLUE),
+                      ("الهدف", t["target"], GREEN)]
+            if t["exit"] is not None:
+                levels.append(("الخروج", t["exit"], col(t["pnl"])))
+            sub = (f"دخول {hm_et(t['entry_utc'])} نيويورك • {t['shares']} سهم"
+                   + (f" • <b style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>" if t["pnl"] is not None else ""))
+        else:
+            lab, c_ = STATE_AR.get(al["state"], (al["state"], GREY))
+            head_tag = pill(lab, "t-green" if c_ == GREEN else "t-red" if c_ == RED else "t-amber")
+            levels = [("إبطال", al["invalidation"], RED), ("التنبيه", al["price"], "#0f1419"), ("الاختراق", al["trigger"], BLUE)]
+            sub = f"تنبيه {hm_et(al['alert_utc'])} نيويورك"
+        if al:
+            sub += f" • الدرجة {al['score']}"
+    levels = [(n, v, c) for n, v, c in levels if v is not None]
+    ladder = ""
+    if levels:
+        vs = [v for _, v, _ in levels]
+        lo, hi = min(vs), max(vs)
+        span = (hi - lo) or max(hi * 0.02, 0.01)
+        lo, hi = lo - span * 0.08, hi + span * 0.08
+        P = lambda v: 100 * (v - lo) / (hi - lo)
+        stop = next((v for n, v, _ in levels if n in ("الوقف", "إبطال")), None)
+        tgt = next((v for n, v, _ in levels if n == "الهدف"), None)
+        zones = ""
+        ent = next((v for n, v, _ in levels if n in ("الدخول", "التنبيه", "السعر")), None)
+        if stop is not None and ent is not None:
+            zones += f"<span class='zn' style='left:{P(stop):.1f}%;width:{P(ent) - P(stop):.1f}%;background:#fde2e2'></span>"
+        if tgt is not None and ent is not None:
+            zones += f"<span class='zn' style='left:{P(ent):.1f}%;width:{P(tgt) - P(ent):.1f}%;background:#dcfce7'></span>"
+        merged = []  # دمج المستويات المتساوية (مثل الهدف = الخروج)
+        for n, v, c in sorted(levels, key=lambda x: x[1]):
+            if merged and abs(v - merged[-1][1]) < 1e-9:
+                merged[-1] = (merged[-1][0] + " • " + n, v, c)
+            else:
+                merged.append((n, v, c))
+        marks, last_row = [], [-99.0, -99.0]
+        for n, v, c in merged:
+            x = P(v)
+            row = 0 if x - last_row[0] >= 14 else 1 if x - last_row[1] >= 14 else 0
+            last_row[row] = x
+            marks.append(f"<span class='mk r{row}' style='left:{x:.1f}%;--c:{c}'><b class='mono'>{E(I.fmt_price(v))}</b>"
+                         f"<small>{E(n)}</small><i></i></span>")
+        marks = "".join(marks)
+        ladder = f"<div class='ladder'><div class='track'>{zones}</div>{marks}</div>"
+    parts = ""
+    if d and d.get("parts"):
+        p = d["parts"]
+        parts = "<div class='parts'>" + "".join(
+            f"<div class='pt'><span>{E(k)}</span><div class='pb'><i style='width:{100 * max(0, p.get(k, 0)) / m:.0f}%'></i></div>"
+            f"<b class='mono'>{p.get(k, 0)}/{m}</b></div>" for k, m in PARTS_MAX) + "</div>"
+        if p.get("خصم"):
+            parts += f"<div class='warn'>خصم مخاطر: {p['خصم']}</div>"
+    why = ""
+    if d:
+        rs = [f"<li>{E(x)}</li>" for x in d.get("reasons", [])[:3]] + [f"<li class='rk'>{E(x)}</li>" for x in d.get("risks", [])[:2]]
+        why = f"<ul class='why'>{''.join(rs)}</ul>" if rs else ""
+    name = E((d or {}).get("name", "")[:34])
+    return (f"<div class='fh'><div><span class='sym mono'>{E(sym)}</span> {head_tag}<div class='muted'>{name}</div></div>"
+            f"<div class='muted fs'>{sub}</div></div>{ladder}{parts}{why}")
+
+
+# ------------------------------------------------------------------ سجل الجلسة
+def log_html(alerts, trades, last_cands, last_scan, missed) -> str:
+    ev = []
+    for a in alerts:
+        ev.append((a["alert_utc"], pill("تنبيه", "t-blue"), a["symbol"],
+                   f"درجة {a['score']} • دخول فوق {I.fmt_price(a['trigger'])} • إبطال {I.fmt_price(a['invalidation'])}",
+                   "" if a["gain_from_open"] is None else f"<span class='muted'>{a['gain_from_open']:+.1f}%</span>"))
+        if a["activated_utc"]:
+            lead = "" if a["lead_min"] is None else f" — سبق {a['lead_min']:.0f} د"
+            ev.append((a["activated_utc"], pill("تفعّل", "t-green"), a["symbol"], f"اخترق {I.fmt_price(a['trigger'])}{lead}", ""))
+        if a["invalidated_utc"]:
+            ev.append((a["invalidated_utc"], pill("أُلغي", "t-red"), a["symbol"], f"كسر الإبطال {I.fmt_price(a['invalidation'])}", ""))
+    for t in trades:
+        k = {"A": "A", "B": "B", "BASE": "مقارنة"}.get(t["kind"], t["kind"])
+        if t["entry_utc"] and t["status"] not in ("CANCELLED", "EXPIRED"):
+            ev.append((t["entry_utc"], pill("شراء", "t-dark"), t["symbol"],
+                       f"{k} • {t['shares']} سهم @ {I.fmt_price(t['entry'])} • وقف {I.fmt_price(t['stop'])}", ""))
+        if t["exit_utc"] and t["pnl"] is not None:
+            cls = {"TARGET": "t-green", "STOP": "t-red"}.get(t["status"], "t-grey")
+            ev.append((t["exit_utc"], pill(TSTAT.get(t["status"], t["status"]), cls), t["symbol"],
+                       f"{k} • خروج @ {I.fmt_price(t['exit'])}" + ("" if t["r_mult"] is None else " • " + LTR(f"{t['r_mult']:+.2f}R")),
+                       f"<b class='mono' style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>"))
+        elif t["status"] in ("CANCELLED", "EXPIRED"):
+            ev.append((t["exit_utc"] or t["created_utc"], pill("لم تُنفّذ", "t-grey"), t["symbol"], f"{k} • {t['note'] or ''}", ""))
+    if last_scan:
+        for c in last_cands:
+            d = json.loads(c["data"])
+            if d.get("excluded"):
+                ev.append((last_scan["started_utc"], pill("حظر", "t-amber"), c["symbol"], d["excluded"][0], "<span class='muted'>لم يُتداول</span>"))
+    for m in missed:
+        close = datetime.fromisoformat(m["day"]).replace(hour=16, tzinfo=I.ET).astimezone(I.UTC).isoformat()
+        ev.append((close, pill("فات", "t-grey"), m["symbol"], LTR(f"+{m['max_gain_pct']:.0f}%") + f" بلا تنبيه — {(m['reason'] or '')[:90]}", ""))
+    ev = [e for e in ev if e[0]]
+    ev.sort(key=lambda e: e[0], reverse=True)
+    if not ev:
+        return "<div class='empty'>السجل فارغ — يمتلئ أثناء الجلسة (تنبيهات، تفعيل، صفقات، حظر، وما فات).</div>"
+    rows = []
+    last_day = None
+    for at, tag, sym, why, val in ev[:60]:
+        day = datetime.fromisoformat(at).astimezone(I.ET).strftime("%Y-%m-%d")
+        if day != last_day:
+            rows.append(f"<div class='lday mono'>{day}</div>")
+            last_day = day
+        rows.append(f"<div class='lr'><span class='lt mono'>{hm_et(at)}</span>{tag}<div class='lb'><b class='mono'>{E(sym)}</b>"
+                    f"<small>{E(why)}</small></div><span class='lv'>{val}</span></div>")
+    return "<div class='log'>" + "".join(rows) + "</div>"
+
+
+# ------------------------------------------------------------------ البناء
 def build(store, out_path: str, cfg: dict) -> None:
     runs = store.q("SELECT * FROM runs ORDER BY id DESC LIMIT 60")
-    last_scan = store.one("SELECT id, started_utc FROM runs WHERE id IN (SELECT DISTINCT run_id FROM candidates) ORDER BY id DESC LIMIT 1")
+    last_scan = store.one("SELECT * FROM runs WHERE id IN (SELECT DISTINCT run_id FROM candidates) ORDER BY id DESC LIMIT 1")
+    last_scan_any = store.one("SELECT * FROM runs WHERE kind='scan' ORDER BY id DESC LIMIT 1")
     cands = store.q("SELECT * FROM candidates WHERE run_id=? ORDER BY qualifies DESC, score DESC", (last_scan["id"],)) if last_scan else []
     alerts = store.q("SELECT * FROM alerts ORDER BY id DESC LIMIT 300")
     trades = store.q("SELECT * FROM trades ORDER BY id DESC")
     missed = store.q("SELECT * FROM missed ORDER BY day DESC, max_gain_pct DESC LIMIT 200")
+    day = store.one("SELECT MAX(day) d FROM (SELECT day FROM candidates UNION SELECT day FROM alerts UNION SELECT day FROM trades)")
+    day = day["d"] if day else None
 
-    # ---- المرشحون
+    # ---- الأرقام الرئيسية
+    sA, sB, sBase = (TR.summary([t for t in trades if t["kind"] == k]) for k in ("A", "B", "BASE"))
+    totA = sA.get("total_pnl", 0.0) if sA.get("trades") else 0.0
+    closedA = [t for t in trades if t["kind"] == "A" and t["pnl"] is not None]
+    winsA = sum(1 for t in closedA if t["pnl"] > 0)
+    lead = [a["lead_min"] for a in alerts if a["lead_min"] is not None]
+    best = max([t for t in trades if t["r_mult"] is not None and t["kind"] in ("A", "B")], key=lambda t: t["r_mult"], default=None)
+    last_closed = max([t for t in trades if t["pnl"] is not None and t["exit_utc"]], key=lambda t: t["exit_utc"], default=None)
+    alerts_today = sum(1 for a in alerts if a["day"] == day)
+
+    # ---- الوكلاء: مراحل الفحص بأرقام آخر تشغيل
+    ls = last_scan or last_scan_any or {}
+    cd_ = [json.loads(c["data"]) for c in cands]
+    n_excl = sum(1 for d in cd_ if d.get("excluded"))
+    n_news = sum(1 for d in cd_ if d.get("news_headline"))
+    n_broken = sum(1 for c, d in zip(cands, cd_) if c["stage"] == "BROKEN" or d.get("stage") == "BROKEN")
+    n_open = sum(1 for t in trades if t["status"] in ("OPEN", "PENDING"))
+    act = sum(1 for a in alerts if a["day"] == day and a["state"] == "ACTIVATED")
+    inv = sum(1 for a in alerts if a["day"] == day and a["state"] == "INVALIDATED")
+    n_missed = sum(1 for m in missed if m["day"] == day)
+    agents = [
+        ("ماسح السوق", "كل الأسهم المدرجة", f"{ls.get('swept') or 0:,}", "#2563eb", "radar"),
+        ("الفلتر", "تحت 5$ وحجم كافٍ", f"{ls.get('shortlist') or 0}", "#0891b2", "filter"),
+        ("محلل الشموع", "RVOL • تماسك • VWAP", f"{len(cands)}", "#7c3aed", "candle"),
+        ("حارس SEC", "طرح • شطب • تجميع", f"{n_excl} محظور", "#dc2626", "shield"),
+        ("قارئ الأخبار", "جوهري / ترويجي", f"{n_news}", "#db2777", "news"),
+        ("بوابة التبكير", "قبل الاختراق فقط", f"{n_broken} فات", "#d97706", "gate"),
+        ("المنبّه", "تيليجرام", f"{ls.get('alerts') or 0}", "#ea580c", "bell"),
+        ("الصفقات", "A • B • مقارنة", f"{n_open} مفتوحة", "#16a34a", "wallet"),
+        ("المتابع", "تفعّل / أُلغي", f"{act} / {inv}", "#059669", "eye"),
+        ("مدقق «فاتت»", "30%+ بلا تنبيه", f"{n_missed}", "#475569", "search"),
+    ]
+    la = alerts[0] if alerts else None
+    core_note = ("آخر إشارة: <b class='mono'>" + E(la["symbol"]) + "</b> " + STATE_AR.get(la["state"], (la["state"], ""))[0]
+                 if la else "لا إشارات بعد")
+
+    # ---- الجداول
     crow = []
     for c in cands[:60]:
         d = json.loads(c["data"])
@@ -69,50 +343,44 @@ def build(store, out_path: str, cfg: dict) -> None:
         why = "<br>".join(E(x) for x in d.get("reasons", [])[:5])
         bad = "<br>".join(E(x) for x in (d.get("excluded", []) + d.get("gates_failed", []))[:4])
         risks = "<br>".join(E(x) for x in d.get("risks", [])[:3])
-        stage = "🟡 مبكرة" if d.get("stage") == "EARLY" else "🔺 فاتت/اخترق"
-        crow.append([f"<b>{E(c['symbol'])}</b><div class='muted'>{E((d.get('name') or '')[:28])}</div>",
-                     f"<b style='color:{'#4ade80' if ok else '#9da7b3'}'>{c['score']}</b>" + (" ✔" if ok else ""),
-                     stage, I.fmt_price(d.get("price")),
+        stage = pill("مبكرة", "t-amber") if d.get("stage") == "EARLY" else pill("فاتت/اخترق", "t-grey")
+        crow.append([f"<b class='mono'>{E(c['symbol'])}</b><div class='muted'>{E((d.get('name') or '')[:28])}</div>",
+                     f"<b class='mono' style='color:{GREEN if ok else GREY}'>{c['score']}</b>" + (" ✔" if ok else ""),
+                     stage, f"<span class='mono'>{I.fmt_price(d.get('price'))}</span>",
                      f"{d['rvol']:.1f}×" if d.get("rvol") else "—",
-                     f"{I.fmt_price(d.get('trigger'))} / {I.fmt_price(d.get('invalidation'))}",
+                     f"<span class='mono'>{I.fmt_price(d.get('trigger'))} / {I.fmt_price(d.get('invalidation'))}</span>",
                      why or "—", (f"<span class='bad'>{bad}</span>" if bad else "") + (f"<div class='warn'>{risks}</div>" if risks else ""),
                      f"{RL.quality_label(d.get('data_quality', 0))} ({d.get('data_quality', 0)})"])
     cand_html = table(["السهم", "الدرجة", "المرحلة", "السعر", "RVOL", "الدخول / الإبطال", "سبب الإشارة", "ما يمنع / المخاطر", "جودة البيانات"], crow)
 
-    # ---- التنبيهات
     arow = []
     for a in alerts:
-        lab, col = STATE_AR.get(a["state"], (a["state"], "#9da7b3"))
-        arow.append([E(a["day"]), t_et(a["alert_utc"]), f"<b>{E(a['symbol'])}</b>", str(a["score"]), I.fmt_price(a["price"]),
-                     I.fmt_price(a["trigger"]), I.fmt_price(a["invalidation"]), f"<span style='color:{col}'>{lab}</span>",
+        lab, c_ = STATE_AR.get(a["state"], (a["state"], GREY))
+        arow.append([E(a["day"]), t_et(a["alert_utc"]), f"<b class='mono'>{E(a['symbol'])}</b>", str(a["score"]), I.fmt_price(a["price"]),
+                     I.fmt_price(a["trigger"]), I.fmt_price(a["invalidation"]), f"<b style='color:{c_}'>{lab}</b>",
                      "—" if a["lead_min"] is None else f"{a['lead_min']:.0f} د",
                      "—" if a["gain_from_open"] is None else f"{a['gain_from_open']:+.1f}%",
                      f"{a['data_quality']}", "✓" if a["sent"] else "✗"])
     alert_html = table(["اليوم", "الوقت (نيويورك)", "السهم", "الدرجة", "السعر", "شرط الدخول", "الإبطال", "الحالة",
                         "السبق قبل الاختراق", "التغير عند التنبيه", "جودة البيانات", "أُرسل"], arow)
 
-    # ---- الصفقات
-    sA, sB, sBase = (TR.summary([t for t in trades if t["kind"] == k]) for k in ("A", "B", "BASE"))
-    summ = ("<div class='grid'>" + sum_card("A: الدخول عند التنبيه", sA) + sum_card("B: الدخول عند الاختراق", sB)
-            + sum_card("المقارنة: أي سهم قفز حجمه", sBase) + "</div>")
+    summ = ("<div class='grid3'>" + sum_card("A: الدخول عند التنبيه", sA, GREEN) + sum_card("B: الدخول عند الاختراق", sB, BLUE)
+            + sum_card("المقارنة: أي سهم قفز حجمه", sBase, GREY) + "</div>")
     trow = []
     for t in trades[:400]:
-        col = "#4ade80" if (t["pnl"] or 0) > 0 else "#f87171" if (t["pnl"] or 0) < 0 else "#c9d1d9"
-        trow.append([E(t["day"]), E(KIND.get(t["kind"], t["kind"])), f"<b>{E(t['symbol'])}</b>", t_et(t["entry_utc"] or t["created_utc"]),
+        trow.append([E(t["day"]), E(KIND.get(t["kind"], t["kind"])), f"<b class='mono'>{E(t['symbol'])}</b>", t_et(t["entry_utc"] or t["created_utc"]),
                      I.fmt_price(t["entry"]), I.fmt_price(t["stop"]), I.fmt_price(t["target"]), str(t["shares"]),
                      E(TSTAT.get(t["status"], t["status"])), I.fmt_price(t["exit"]), t_et(t["exit_utc"]),
-                     f"<b style='color:{col}'>{money(t['pnl'])}</b>", "—" if t["r_mult"] is None else f"{t['r_mult']:+.2f}R",
+                     f"<b class='mono' style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>", "—" if t["r_mult"] is None else f"{t['r_mult']:+.2f}R",
                      f"<span class='muted'>{E(t['note'])}</span>"])
     trade_html = summ + table(["اليوم", "النوع", "السهم", "الدخول (نيويورك)", "سعر الدخول", "الوقف", "الهدف", "الكمية", "الحالة",
                                "الخروج", "وقت الخروج", "الربح", "R", "ملاحظة"], trow)
 
-    # ---- فاتت
-    mrow = [[E(m["day"]), f"<b>{E(m['symbol'])}</b>", I.fmt_price(m["prev_close"]), f"+{m['max_gain_pct']:.0f}%",
+    mrow = [[E(m["day"]), f"<b class='mono'>{E(m['symbol'])}</b>", I.fmt_price(m["prev_close"]), f"+{m['max_gain_pct']:.0f}%",
              f"{m['close_gain_pct']:+.0f}%", "نعم" if m["was_candidate"] else "لا", "—" if m["best_score"] is None else str(m["best_score"]),
              f"<span class='muted'>{E(m['reason'])}</span>"] for m in missed]
     missed_html = table(["اليوم", "السهم", "إغلاق أمس", "أعلى ارتفاع", "عند آخر فحص", "كان مرشحاً؟", "أعلى درجة", "لماذا لم يُنبَّه"], mrow)
 
-    # ---- التشغيلات
     rrow = [[E(r["id"]), E(r["kind"]), t_et(r["started_utc"]), "—" if r["delay_min"] is None else f"{r['delay_min']:.0f} د",
              str(r["swept"] or 0), str(r["shortlist"] or 0), str(r["qualified"] or 0), str(r["alerts"] or 0),
              str(r["api_calls"] or 0), "—" if r["duration_sec"] is None else f"{r['duration_sec']:.0f} ث",
@@ -123,41 +391,56 @@ def build(store, out_path: str, cfg: dict) -> None:
     upd = runs[0]["started_utc"] if runs else None
     upd_txt = "—" if not upd else (datetime.fromisoformat(upd).astimezone(I.RIYADH).strftime("%Y-%m-%d %H:%M") + " الرياض • "
                                    + datetime.fromisoformat(upd).astimezone(I.ET).strftime("%H:%M") + " نيويورك")
-    page = f"""<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>تنبيه مبكر — أسهم تحت 5$</title>
-<style>
-:root{{--bg:#0b0f14;--card:#141a22;--line:#26303c;--txt:#e6edf3;--mut:#8b96a5}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif}}
-header{{padding:22px 18px 8px;max-width:1300px;margin:auto}}h1{{margin:0;font-size:22px}}
-.muted{{color:var(--mut);font-size:13px}}.bad{{color:#fca5a5;font-size:13px}}.warn{{color:#fde68a;font-size:13px}}
-.note{{background:#1a1406;border:1px solid #6b4e0a;color:#fde68a;border-radius:10px;padding:10px 14px;margin:12px 0;font-size:14px}}
-nav{{display:flex;gap:6px;flex-wrap:wrap;max-width:1300px;margin:8px auto;padding:0 18px}}
-nav a{{color:var(--txt);text-decoration:none;background:var(--card);border:1px solid var(--line);padding:8px 14px;border-radius:10px;font-size:14px}}
-nav a:hover{{border-color:#3b82f6}}section{{max-width:1300px;margin:18px auto;padding:0 18px}}h2{{font-size:18px;margin:8px 0}}
-.tw{{overflow-x:auto;border:1px solid var(--line);border-radius:12px}}table{{border-collapse:collapse;width:100%;min-width:900px}}
-th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top;font-size:13.5px}}
-th{{background:#111821;color:var(--mut);font-weight:600;position:sticky;top:0}}tr:hover td{{background:#121922}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:12px}}
-.card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}}.ct{{color:var(--mut);font-size:13px}}
-.big{{font-size:26px;font-weight:700;direction:ltr;text-align:right}}.kv{{display:flex;justify-content:space-between;font-size:13.5px;border-top:1px solid var(--line);padding:4px 0}}
-.kv b{{direction:ltr}}
-.bar{{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin-top:12px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}}
-.bar button{{background:#1f6feb;color:#fff;border:0;border-radius:9px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}}
-.bar button:hover{{background:#388bfd}}.bar button:disabled{{opacity:.6;cursor:wait}}
-.tm{{display:flex;align-items:baseline;gap:8px}}.tm b{{font:700 22px/1 ui-monospace,Consolas,monospace;direction:ltr;color:#fbbf24}}
-.new{{color:#4ade80;font-weight:600}}.new a{{color:#4ade80}}
-</style></head><body>
-<header><h1>🔔 التنبيه المبكر — أسهم أمريكية تحت 5$</h1>
-<div class="muted">آخر تحديث: {E(upd_txt)} • فحص كل 15 دقيقة أثناء الجلسة</div>
+
+    def tile(label, value, sub="", color="#0f1419"):
+        return f"<div class='tile'><span>{label}</span><b class='mono' style='color:{color}'>{value}</b><small>{sub}</small></div>"
+
+    tiles = ("<div class='tiles'>"
+             + tile("تنبيهات اليوم", str(alerts_today), f"الإجمالي {len(alerts)}")
+             + tile("متوسط السبق قبل الاختراق", "—" if not lead else f"{sum(lead) / len(lead):.0f} د", f"من {len(lead)} تنبيه تفعّل")
+             + tile("نسبة الربح (A)", "—" if not closedA else f"{winsA / len(closedA):.0%}", f"{winsA} ربح / {len(closedA) - winsA} خسارة")
+             + tile("أفضل صفقة", "—" if not best else f"{best['r_mult']:+.2f}R", "" if not best else f"{E(best['symbol'])} • {best['kind']}",
+                    GREEN if best and best["r_mult"] > 0 else "#0f1419")
+             + tile("آخر صفقة مغلقة", "—" if not last_closed else money(last_closed["pnl"]),
+                    "" if not last_closed else f"{E(last_closed['symbol'])} • {E(TSTAT.get(last_closed['status'], ''))}",
+                    col(last_closed["pnl"]) if last_closed else "#0f1419")
+             + "</div>")
+
+    head_sub = (f"A: {len(closedA)} صفقة • {winsA} ربح / {len(closedA) - winsA} خسارة"
+                f" • B {money(sB.get('total_pnl')) if sB.get('trades') else '—'} • المقارنة {money(sBase.get('total_pnl')) if sBase.get('trades') else '—'}")
+
+    page = (HEAD
+            + f"""<header class="top">
+<div class="brand"><div class="logo">{icon('bell')}</div><div>
+<h1>التنبيه <span>المبكر</span></h1>
+<div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت 5$ • Alpaca • SEC EDGAR</div>
+</div></div>
+<div class="bal"><div class="bv mono" style="color:{col(totA) if totA else '#0f1419'}">{E(money(totA) if closedA else '0.00$')}</div>
+<div class="muted mono-ish">{E(head_sub)}</div></div>
+</header>
+<div class="wrap">
 <div class="bar" data-updated="{E(upd or '')}">
-  <button id="refresh" type="button">🔄 تحديث</button>
-  <div class="tm"><span class="lbl" id="nlbl">الفحص التالي بعد</span><b id="cd">—</b><span class="muted" id="nat"></span></div>
+  <button id="refresh" type="button">تحديث</button>
+  <div class="tm"><span class="lbl" id="nlbl">الفحص التالي بعد</span><b id="cd" class="mono">—</b><span class="muted" id="nat"></span></div>
   <div class="muted" id="age"></div>
-  <div class="new" id="newv" hidden>✨ وصل تحديث جديد — <a href="#" id="reload2">اعرضه</a></div>
+  <div class="muted">آخر تحديث: {E(upd_txt)}</div>
+  <div class="new" id="newv" hidden>وصل تحديث جديد — <a href="#" id="reload2">اعرضه</a></div>
+</div>
+<div class="card"><div class="ch"><span class="lab">الربح الافتراضي — {cfg['shares_per_trade']} سهم لكل صفقة</span>
+<span class="lg"><i class="la"></i>A عند التنبيه <i class="lb2"></i>B عند الاختراق <i class="lc"></i>المقارنة</span></div>
+{equity_html(trades)}</div>
+{tiles}
+<div class="card"><div class="ch"><span class="lab">مدار الوكلاء — كلهم متصلون بالمحرك</span>
+<span class="muted">أرقام آخر فحص {E(t_et(ls.get('started_utc')) if ls else '—')} نيويورك</span></div>
+{orbit_html(agents, str(ls.get('qualified') or 0), f"مؤهل • حد {cfg['min_score']}", core_note)}</div>
+<div class="two">
+<div class="card"><div class="ch"><span class="lab">الصفقة المميزة</span><span class="muted">مستويات حقيقية من قاعدة البيانات</span></div>
+{focus_html(alerts, trades, cands)}</div>
+<div class="card"><div class="ch"><span class="lab">سجل الجلسة — مباشر</span><span class="muted">بتوقيت نيويورك</span></div>
+{log_html(alerts, trades, cands, last_scan, missed)}</div>
 </div>
 <div class="note">البيانات من Alpaca المجانية: السوق الكامل متأخر 15 دقيقة، والسعر اللحظي من IEX فقط (جزء صغير من التداول).
-Float غير متوفر مجاناً. التنبيهات ليست توصية شراء، والصفقات افتراضية فقط. النظام لا يكتشف كل انفجار — راجع قسم «فاتت».</div></header>
+Float غير متوفر مجاناً. التنبيهات ليست توصية شراء، والصفقات افتراضية فقط. النظام لا يكتشف كل انفجار — راجع قسم «فاتت».</div>
 <nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
 <section id="cands"><h2>المرشحون في آخر فحص ({E(t_et(last_scan['started_utc']) if last_scan else '—')} نيويورك)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
@@ -165,57 +448,181 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 <section id="trades"><h2>الصفقات الافتراضية ({cfg['shares_per_trade']} سهم لكل صفقة)</h2>{trade_html}</section>
 <section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت 5$ ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
-<script>
-(function(){{
+<footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
+</div>"""
+            + SCRIPT + "</body></html>")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(page)
+    # ملف صغير تقرؤه الصفحة كل دقيقة لتعرف هل نُشر تحديث جديد
+    with open(os.path.join(os.path.dirname(out_path) or ".", "status.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated": upd, "run": runs[0]["id"] if runs else None}, f)
+
+
+HEAD = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>التنبيه المبكر — أسهم تحت 5$</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--line:#e7e9ee;--txt:#0f1419;--mut:#6b7380;--g:#16a34a;--r:#dc2626;--b:#2563eb}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif}
+.mono{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;direction:ltr;unicode-bidi:isolate}
+.muted{color:var(--mut);font-size:13px}.bad{color:#b91c1c;font-size:13px}.warn{color:#b45309;font-size:13px}
+.wrap{max-width:1280px;margin:auto;padding:0 18px 40px}
+.top{max-width:1280px;margin:auto;padding:22px 18px 14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{display:flex;gap:12px;align-items:center}
+.logo{width:46px;height:46px;border-radius:50%;background:#0f1419;color:#fff;display:grid;place-items:center;box-shadow:0 0 0 4px #e7f6ec}
+.logo svg{width:24px;height:24px}
+h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:var(--g)}
+.st{font-size:12.5px;color:var(--mut)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#9ca3af;margin-inline-end:6px;vertical-align:middle}
+.dot.on{background:var(--g);box-shadow:0 0 0 0 rgba(22,163,74,.6);animation:pulse 1.8s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
+.bal{text-align:left}.bv{font-size:38px;font-weight:700;line-height:1.1}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-top:14px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.ch{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.lab{font:700 12px/1 "JetBrains Mono","IBM Plex Sans Arabic",monospace;letter-spacing:.4px;color:#374151}
+.lg{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px}
+.lg i{display:inline-block;width:18px;height:3px;border-radius:2px;margin-inline-start:8px}
+.la{background:var(--g)}.lb2{background:repeating-linear-gradient(90deg,var(--b) 0 5px,transparent 5px 8px)}.lc{background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.bar button{background:#0f1419;color:#fff;border:0;border-radius:10px;padding:8px 18px;font:inherit;font-weight:600;cursor:pointer}
+.bar button:hover{background:#1f2937}.bar button:disabled{opacity:.6;cursor:wait}
+.tm{display:flex;align-items:baseline;gap:8px}.tm b{font-size:22px;color:var(--g)}
+.new{color:var(--g);font-weight:600}.new a{color:var(--g)}
+.eq{position:relative;height:190px}.eq svg{width:100%;height:100%;display:block;overflow:visible}
+.eqz{stroke:#e5e7eb;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
+.eqa{fill:none;stroke:var(--g);stroke-width:2.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.eqb{fill:none;stroke:var(--b);stroke-width:1.6;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
+.eqbase{fill:none;stroke:#9ca3af;stroke-width:1.4;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.eqtag{position:absolute;right:-6px;transform:translate(0,-50%);color:#fff;font:700 12px "JetBrains Mono",monospace;padding:2px 8px;border-radius:6px;direction:ltr}
+.eqempty{position:absolute;inset:0;display:grid;place-items:center;color:var(--mut);font-size:14px}
+.eqx{display:flex;justify-content:space-between;font-size:11px;color:#9ca3af;margin-top:6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:14px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column}
+.tile span{font-size:12px;color:var(--mut)}.tile b{font-size:24px;line-height:1.3;text-align:right}.tile small{font-size:12px;color:var(--mut)}
+/* مدار الوكلاء */
+.orbit{position:relative;height:470px}
+.ol{position:absolute;inset:0;width:100%;height:100%}
+.ol line{stroke:#d1d5db;stroke-width:1;stroke-dasharray:2 5;vector-effect:non-scaling-stroke;transition:stroke .3s}
+.ol line.on{stroke:var(--c);stroke-width:2;stroke-dasharray:none}
+.ring{position:absolute;left:50%;top:50%;border-radius:50%;transform:translate(-50%,-50%);border:1px dashed #d8e9dd}
+.r1{width:170px;height:170px}.r2{width:250px;height:250px;border-color:#eef0f3}
+.core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:122px;height:122px;border-radius:50%;background:#fff;
+ border:3px solid #0f1419;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 0 0 8px #e7f6ec,0 8px 24px rgba(15,20,25,.08)}
+.cl{width:30px;height:30px;color:#0f1419}.cl svg{width:100%;height:100%}
+.cb{font-size:26px;font-weight:700;line-height:1}.cs{font-size:11px;color:var(--mut)}
+.cnote{position:absolute;left:50%;top:calc(50% + 86px);transform:translateX(-50%);font-size:12px;color:var(--mut);white-space:nowrap}
+.ag{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+ border-radius:12px;padding:7px 10px;min-width:190px;transition:border-color .3s,box-shadow .3s,background .3s}
+.ag i{width:28px;height:28px;border-radius:8px;background:var(--c);color:#fff;display:grid;place-items:center;flex:none}.ag i svg{width:16px;height:16px}
+.ag b{display:block;font-size:12.5px;line-height:1.3}.ag small{display:block;font-size:11px;color:var(--mut);line-height:1.3}
+.ag em{font-style:normal;font-size:12px;font-weight:700;margin-inline-start:auto;color:var(--c);padding-inline-start:6px}
+.ag.on{border-color:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent);background:color-mix(in srgb,var(--c) 6%,#fff)}
+@media (max-width:900px){.orbit{height:auto;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:150px}
+ .ol,.r2,.cnote{display:none}.r1{top:66px}.core{top:66px;width:110px;height:110px}.ag{position:static;transform:none;min-width:0}}
+@media (max-width:520px){.orbit{grid-template-columns:1fr}.bv{font-size:30px}.bal{text-align:right}}
+/* الصفقة المميزة */
+.two{display:grid;grid-template-columns:1fr 1.25fr;gap:14px}.two .card{margin-top:14px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.fh{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.sym{font-size:26px;font-weight:700}.fs{text-align:left}
+.ladder{position:relative;direction:ltr;height:104px;margin:14px 10px 4px}
+.track{position:absolute;left:0;right:0;top:46px;height:8px;border-radius:4px;background:#f1f3f6;overflow:hidden}
+.zn{position:absolute;top:0;bottom:0}
+.mk{position:absolute;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;font-size:11px;color:var(--mut);white-space:nowrap}
+.mk i{position:absolute;left:50%;width:3px;height:22px;margin-left:-1.5px;background:var(--c);border-radius:2px}
+.mk b{font-size:12.5px;color:var(--c);line-height:1.2}.mk small{line-height:1.3}
+.mk.r0{top:0}.mk.r0 i{top:39px}
+.mk.r1{top:66px}.mk.r1 i{top:-27px}
+.parts{margin-top:12px;display:grid;gap:6px}
+.pt{display:grid;grid-template-columns:70px 1fr 52px;align-items:center;gap:8px;font-size:12.5px}
+.pb{height:7px;background:#f1f3f6;border-radius:4px;overflow:hidden}.pb i{display:block;height:100%;background:#0f1419;border-radius:4px}
+.pt b{font-size:12px;text-align:left}
+.why{margin:12px 0 0;padding-inline-start:18px;font-size:13px}.why li{margin:2px 0}.why .rk{color:#b45309}
+/* السجل */
+.log{max-height:430px;overflow:auto;margin:0 -6px}
+.lday{font-size:11px;color:#9ca3af;padding:6px;border-bottom:1px solid var(--line)}
+.lr{display:grid;grid-template-columns:44px 74px 1fr auto;gap:8px;align-items:center;padding:7px 6px;border-bottom:1px solid #f1f3f6;font-size:13px}
+.lr:hover{background:#fafbfc}.lt{font-size:11.5px;color:#9ca3af}
+.lb b{font-size:12.5px}.lb small{display:block;font-size:11.5px;color:var(--mut);line-height:1.4}.lv{font-size:12.5px;text-align:left}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;text-align:center;white-space:nowrap}
+.t-blue{background:#e8efff;color:#1d4ed8}.t-green{background:#e3f7e9;color:#15803d}.t-red{background:#fde8e8;color:#b91c1c}
+.t-amber{background:#fdf0dc;color:#b45309}.t-grey{background:#f1f3f6;color:#4b5563}.t-dark{background:#0f1419;color:#fff}
+/* الجداول */
+.note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:12px;padding:10px 14px;margin:16px 0 0;font-size:13.5px}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5}
+nav a{color:var(--txt);text-decoration:none;background:var(--card);border:1px solid var(--line);padding:7px 14px;border-radius:999px;font-size:13.5px}
+nav a:hover{border-color:#0f1419}
+section{margin:22px 0 0}h2{font-size:17px;margin:6px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff;margin-top:8px}
+table{border-collapse:collapse;width:100%;min-width:900px}
+th,td{padding:9px 11px;border-bottom:1px solid #f1f3f6;text-align:right;vertical-align:top;font-size:13px}
+th{background:#fafbfc;color:var(--mut);font-weight:600;position:sticky;top:0}tr:hover td{background:#fafbfc}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:8px 0 12px}
+.sc{margin:0;border-top:3px solid var(--ac)}.ct{color:var(--mut);font-size:13px}
+.big{font-size:26px;font-weight:700;text-align:right}
+.kv{display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #f1f3f6;padding:4px 0}.kv b{direction:ltr}
+.empty{color:var(--mut);font-size:13.5px;padding:16px;text-align:center;background:#fafbfc;border-radius:12px}
+footer{margin-top:28px;text-align:center}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head><body>
+"""
+
+SCRIPT = """<script>
+(function(){
   // مواعيد الفحص: الدقائق 02 و17 و32 و47 من كل ساعة، من 9:32 إلى 15:47 بتوقيت نيويورك، الاثنين–الجمعة.
-  var SLOTS=[2,17,32,47], FIRST=9*60+32, LAST=15*60+47, PUBLISH_MIN=3;
+  var SLOTS=[2,17,32,47], FIRST=9*60+32, LAST=15*60+47;
   var bar=document.querySelector('.bar'), updated=bar.getAttribute('data-updated');
-  var nyF=new Intl.DateTimeFormat('en-US',{{timeZone:'America/New_York',hour12:false,weekday:'short',hour:'2-digit',minute:'2-digit'}});
-  var ryF=new Intl.DateTimeFormat('ar-SA-u-nu-latn',{{timeZone:'Asia/Riyadh',weekday:'long',hour:'numeric',minute:'2-digit'}});
-  function ny(d){{var o={{}};nyF.formatToParts(d).forEach(function(p){{o[p.type]=p.value}});return {{wd:o.weekday,m:(+o.hour%24)*60+(+o.minute),min:+o.minute}};}}
-  function nextScan(now){{
+  var nyF=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,weekday:'short',hour:'2-digit',minute:'2-digit'});
+  var ryF=new Intl.DateTimeFormat('ar-SA-u-nu-latn',{timeZone:'Asia/Riyadh',weekday:'long',hour:'numeric',minute:'2-digit'});
+  function ny(d){var o={};nyF.formatToParts(d).forEach(function(p){o[p.type]=p.value});return {wd:o.weekday,m:(+o.hour%24)*60+(+o.minute),min:+o.minute};}
+  function nextScan(now){
     var t=new Date(now.getTime()); t.setSeconds(0,0); t=new Date(t.getTime()+60000);
-    for(var i=0;i<6*24*60;i++){{
+    for(var i=0;i<6*24*60;i++){
       var p=ny(t);
       if(p.wd!=='Sat'&&p.wd!=='Sun'&&p.m>=FIRST&&p.m<=LAST&&SLOTS.indexOf(p.min)>=0) return t;
       t=new Date(t.getTime()+60000);
-    }}
+    }
     return null;
-  }}
-  function fmt(sec){{sec=Math.max(0,Math.round(sec));var d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60),s=sec%60;
-    function z(x){{return (x<10?'0':'')+x}}var t=(h||d?z(h)+':'+z(m):m)+':'+z(s);return d?d+'ي '+t:t;}}
+  }
+  function fmt(sec){sec=Math.max(0,Math.round(sec));var d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60),s=sec%60;
+    function z(x){return (x<10?'0':'')+x}var t=(h||d?z(h)+':'+z(m):m)+':'+z(s);return d?d+'ي '+t:t;}
   var cd=document.getElementById('cd'),nat=document.getElementById('nat'),nlbl=document.getElementById('nlbl'),age=document.getElementById('age');
-  function tick(){{
-    var now=new Date(), n=nextScan(now);
-    if(n){{
-      var left=(n-now)/1000, open=ny(now), inSession=open.wd!=='Sat'&&open.wd!=='Sun'&&open.m>=9*60+30&&open.m<16*60;
-      nlbl.textContent=inSession?'الفحص التالي بعد':'السوق مغلق — أول فحص بعد';
-      cd.textContent=fmt(left);
-      nat.textContent='('+ryF.format(n)+' بتوقيت الرياض، والموقع يتحدث بعده بدقيقة إلى ثلاث)';
-    }}
-    if(updated){{var a=(now-new Date(updated))/60000;
-      age.textContent='آخر تحديث قبل '+(a<1?'أقل من دقيقة':a<60?Math.floor(a)+' دقيقة':a<1440?Math.floor(a/60)+' ساعة':Math.floor(a/1440)+' يوم');}}
-  }}
-  function reload(){{var b=document.getElementById('refresh');b.disabled=true;b.textContent='⏳ جارٍ التحديث…';
-    location.replace(location.pathname+'?t='+Date.now()+location.hash);}}
+  var live=document.getElementById('live'),dot=document.getElementById('dot');
+  function tick(){
+    var now=new Date(), n=nextScan(now), open=ny(now);
+    var inSession=open.wd!=='Sat'&&open.wd!=='Sun'&&open.m>=9*60+30&&open.m<16*60;
+    live.textContent=inSession?'يعمل الآن — الجلسة مفتوحة':'السوق مغلق';
+    dot.className='dot'+(inSession?' on':'');
+    if(n){
+      nlbl.textContent=inSession?'الفحص التالي بعد':'أول فحص بعد';
+      cd.textContent=fmt((n-now)/1000);
+      nat.textContent='('+ryF.format(n)+' بتوقيت الرياض)';
+    }
+    if(updated){var a=(now-new Date(updated))/60000;
+      age.textContent='آخر تحديث قبل '+(a<1?'أقل من دقيقة':a<60?Math.floor(a)+' دقيقة':a<1440?Math.floor(a/60)+' ساعة':Math.floor(a/1440)+' يوم');}
+  }
+  function reload(){var b=document.getElementById('refresh');b.disabled=true;b.textContent='جارٍ التحديث…';
+    location.replace(location.pathname+'?t='+Date.now()+location.hash);}
   document.getElementById('refresh').onclick=reload;
-  document.getElementById('reload2').onclick=function(e){{e.preventDefault();reload();}};
+  document.getElementById('reload2').onclick=function(e){e.preventDefault();reload();};
   // كل دقيقة: هل نُشرت نسخة أحدث من الصفحة المفتوحة؟
-  function poll(){{
+  function poll(){
     if(location.protocol==='file:')return;
-    fetch('status.json?t='+Date.now(),{{cache:'no-store'}}).then(function(r){{return r.ok?r.json():null}}).then(function(j){{
-      if(j&&j.updated&&j.updated!==updated){{document.getElementById('newv').hidden=false;
-        var done=null;try{{done=sessionStorage.getItem('hu_auto')}}catch(e){{}}
-        if(document.visibilityState==='visible'&&done!==j.updated){{try{{sessionStorage.setItem('hu_auto',j.updated)}}catch(e){{}}setTimeout(reload,1500);}}}}
-    }}).catch(function(){{}});
-  }}
+    fetch('status.json?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).then(function(j){
+      if(j&&j.updated&&j.updated!==updated){document.getElementById('newv').hidden=false;
+        var done=null;try{done=sessionStorage.getItem('hu_auto')}catch(e){}
+        if(document.visibilityState==='visible'&&done!==j.updated){try{sessionStorage.setItem('hu_auto',j.updated)}catch(e){}setTimeout(reload,1500);}}
+    }).catch(function(){});
+  }
+  // مدار الوكلاء: يمر الضوء على المراحل بترتيب الفحص (ماسح ← فلتر ← … ← فاتت)
+  var ags=[].slice.call(document.querySelectorAll('.ag')), lns=[].slice.call(document.querySelectorAll('.ol line')), k=0;
+  function step(){ags.forEach(function(a,i){a.classList.toggle('on',i===k)});lns.forEach(function(l,i){l.classList.toggle('on',i===k)});k=(k+1)%(ags.length||1);}
+  if(ags.length){step();setInterval(step,1500);}
   tick(); setInterval(tick,1000); poll(); setInterval(poll,60000);
-}})();
+})();
 </script>
-</body></html>"""
-    import os
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    open(out_path, "w", encoding="utf-8").write(page)
-    # ملف صغير تقرؤه الصفحة كل دقيقة لتعرف هل نُشر تحديث جديد
-    json.dump({"updated": upd, "run": runs[0]["id"] if runs else None},
-              open(os.path.join(os.path.dirname(out_path) or ".", "status.json"), "w", encoding="utf-8"))
+"""
