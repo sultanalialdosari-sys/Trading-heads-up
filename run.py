@@ -47,7 +47,15 @@ def main(argv) -> int:
     sec = SecClient(cache_dir=DATA)
     kind = "final" if "--final" in argv else "scan"
     now = datetime.now(timezone.utc)
-    sched = scheduled_time(now, 40 if kind == "final" else 17)
+    # التشغيل اليدوي ليس له موعد، فلا نحسب له تأخيراً
+    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    sched = None if manual else scheduled_time(now, 40 if kind == "final" else 17)
+    # فحص وجود الأسرار (الأسماء فقط — لا تُطبع القيم أبداً)
+    names = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_USER_AGENT"]
+    print("الأسرار:", " • ".join(f"{n} {'✅' if os.environ.get(n, '').strip() else '❌ فارغ/غير موجود'}" for n in names))
+    ua = os.environ.get("SEC_USER_AGENT", "")
+    if ua and "@" not in ua:
+        print("⚠️ SEC_USER_AGENT يجب أن يحتوي بريداً (مثل: Rayan rayan@gmail.com)")
     eng = Engine(client, store, cfg, sec, tg)
     info = eng.run(kind, sched)
     site.build(store, os.path.join(DOCS, "index.html"), cfg)
