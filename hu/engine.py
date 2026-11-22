@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""دورة واحدة: مسح ← تقييم ← تنبيه ← صفقات افتراضية ← متابعة. تُشغَّل كل ساعة من GitHub Actions.
+"""دورة واحدة: مسح ← تقييم ← تنبيه ← صفقات افتراضية ← متابعة. تُشغَّل كل 15 دقيقة من GitHub Actions.
 
 مراحل المسح:
  1) لقطة لكل الأسهم الأمريكية المدرجة (بدون OTC) — السوق الكامل متأخر 15 دقيقة (delayed_sip)، وإن رُفض: IEX.
@@ -193,7 +193,7 @@ class Engine:
         return info
 
     def scan(self, now: datetime, day: str, snap_df: pd.DataFrame, info: dict) -> None:
-        # أول مرة يظهر فيها سهم تحت 5$ مرتفعاً 10%+ (لقياس هل الفحص كل ساعة متأخر)
+        # أول مرة يظهر فيها سهم تحت 5$ مرتفعاً 10%+ (لقياس هل الفحص الدوري متأخر)
         mv = snap_df[(snap_df.price <= self.cfg["max_price"]) & (snap_df.chg >= 10)]
         for _, r in mv.iterrows():
             self.db.db.execute("INSERT OR IGNORE INTO movers VALUES (?,?,?,?,?)",
@@ -370,7 +370,7 @@ class Engine:
                 f = self.db.one("SELECT * FROM movers WHERE day=? AND symbol=?", (day, r.symbol))
                 if f and f["first_chg"] > self.cfg["max_day_change_pct"]:
                     reason = (f"تحرك بين فحصين: أول ظهور الساعة {et_str(f['first_utc'])} نيويورك وقد ارتفع "
-                              f"{f['first_chg']:.0f}% بالفعل — الفحص كل ساعة كان متأخراً")
+                              f"{f['first_chg']:.0f}% بالفعل — الفحص الدوري كان متأخراً")
                 elif f:
                     reason = (f"ظهر الساعة {et_str(f['first_utc'])} مرتفعاً {f['first_chg']:.0f}% لكنه لم يدخل القائمة القصيرة "
                               "(حجم دولاري أو قفزة حجم غير كافية)")

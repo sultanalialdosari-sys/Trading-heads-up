@@ -135,7 +135,11 @@ def evaluate_setup(sym: str, d: pd.DataFrame, cfg: dict, daily: Optional[pd.Data
     st.bar_time = d.index[i].isoformat()
     close = float(row["close"])
     atr = _f(row["atr"])
-    W = int(cfg["window_bars"])
+    W = min(int(cfg["window_bars"]), len(td))   # بداية الجلسة: نافذة أقصر (لا تمتد لليوم السابق)
+    if W < 6:
+        st.gates_failed.append("بداية الجلسة: أقل من 30 دقيقة من بيانات اليوم")
+        st.stage = "NONE"
+        return st
 
     # ---------------- الحجم
     st.rvol = _f(row["rvol"])

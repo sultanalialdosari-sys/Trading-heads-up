@@ -144,7 +144,7 @@ th{{background:#111821;color:var(--mut);font-weight:600;position:sticky;top:0}}t
 .kv b{{direction:ltr}}
 </style></head><body>
 <header><h1>🔔 التنبيه المبكر — أسهم أمريكية تحت 5$</h1>
-<div class="muted">آخر تحديث: {E(upd_txt)} • فحص كل ساعة أثناء الجلسة</div>
+<div class="muted">آخر تحديث: {E(upd_txt)} • فحص كل 15 دقيقة أثناء الجلسة</div>
 <div class="note">البيانات من Alpaca المجانية: السوق الكامل متأخر 15 دقيقة، والسعر اللحظي من IEX فقط (جزء صغير من التداول).
 Float غير متوفر مجاناً. التنبيهات ليست توصية شراء، والصفقات افتراضية فقط. النظام لا يكتشف كل انفجار — راجع قسم «فاتت».</div></header>
 <nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>

@@ -34,7 +34,7 @@ def build(store: Store, d1: str, d2: str) -> str:
     sA, sB, sBase = (TR.summary([t for t in tr if t["kind"] == k]) for k in ("A", "B", "BASE"))
     scans = [r for r in runs if r["kind"] == "scan" and r["market_open"]]
     delays = sorted(r["delay_min"] for r in scans if r["delay_min"] is not None)
-    expected = len({r["started_utc"][:10] for r in scans}) * 6   # 10:17 … 15:17 نيويورك
+    expected = len({r["started_utc"][:10] for r in scans}) * 26  # كل 15 دقيقة: 9:32 … 15:47 نيويورك
     errs = [r for r in runs if r["errors"]]
     cats = Counter("تحرك بين فحصين" if "بين فحصين" in m["reason"] else
                    "كان مرشحاً لكن لم يستوفِ القواعد" if m["was_candidate"] else

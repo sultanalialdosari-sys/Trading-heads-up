@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """نقطة التشغيل (GitHub Actions أو جهازك).
 
-  python run.py            فحص عادي (كل ساعة أثناء الجلسة)
+  python run.py            فحص عادي (كل 15 دقيقة أثناء الجلسة)
   python run.py --final    تشغيل ما بعد الإغلاق: إغلاق الصفقات، «فاتت»، ملخص اليوم
   python run.py --site     إعادة بناء الموقع فقط
 
@@ -26,9 +26,13 @@ DATA = os.environ.get("HEADSUP_DATA", os.path.join(BASE, "data"))
 DOCS = os.path.join(BASE, "docs")
 
 
-def scheduled_time(now: datetime, minute: int) -> datetime:
-    s = now.replace(minute=minute, second=0, microsecond=0)
-    return s if s <= now else s - timedelta(hours=1)
+def scheduled_time(now: datetime, minutes) -> datetime:
+    """أقرب موعد مجدول سابق (لحساب تأخر GitHub)."""
+    cands = []
+    for m in minutes:
+        s = now.replace(minute=m, second=0, microsecond=0)
+        cands.append(s if s <= now else s - timedelta(hours=1))
+    return max(cands)
 
 
 def main(argv) -> int:
@@ -49,7 +53,7 @@ def main(argv) -> int:
     now = datetime.now(timezone.utc)
     # التشغيل اليدوي ليس له موعد، فلا نحسب له تأخيراً
     manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    sched = None if manual else scheduled_time(now, 40 if kind == "final" else 17)
+    sched = None if manual else scheduled_time(now, [40] if kind == "final" else [2, 17, 32, 47])
     # فحص وجود الأسرار (الأسماء فقط — لا تُطبع القيم أبداً)
     names = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_USER_AGENT"]
     print("الأسرار:", " • ".join(f"{n} {'✅' if os.environ.get(n, '').strip() else '❌ فارغ/غير موجود'}" for n in names))

@@ -201,3 +201,14 @@ def test_sim_gap_stop_same_bar_and_b_rules():
 def test_ticks():
     from hu.rules import tick_up, tick_down
     assert tick_up(1.9134) == 1.92 and tick_down(1.8889) == 1.88 and tick_up(0.45671) == 0.4568 and tick_up(2.0) == 2.0
+
+
+def test_session_start_no_alert_and_schedule():
+    st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
+    w = FakeWorld()
+    info, tg = run_at(w, st, (9, 47))
+    assert info["alerts"] == 0 and not any(m.startswith("🔔") for m in tg)
+    import run as R
+    now = datetime(2026, 11, 20, 15, 40, tzinfo=UTC)
+    assert R.scheduled_time(now, [2, 17, 32, 47]) == datetime(2026, 11, 20, 15, 32, tzinfo=UTC)
+    assert R.scheduled_time(datetime(2026, 11, 20, 15, 1, tzinfo=UTC), [2, 17, 32, 47]) == datetime(2026, 11, 20, 14, 47, tzinfo=UTC)
