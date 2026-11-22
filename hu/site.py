@@ -16,7 +16,7 @@ from hu import trades as TR
 
 E = lambda x: html.escape("" if x is None else str(x))
 LTR = lambda x: "\u2066" + str(x) + "\u2069"   # عزل الأرقام داخل النص العربي حتى لا تنقلب (+1.62R)
-GREEN, RED, BLUE, AMBER, GREY = "#16a34a", "#dc2626", "#2563eb", "#d97706", "#6b7380"
+GREEN, RED, BLUE, AMBER, GREY = "var(--g)", "var(--r)", "var(--b)", "var(--a)", "var(--mut)"
 STATE_AR = {"OPEN": ("مفتوحة", AMBER), "ACTIVATED": ("تفعّلت", GREEN), "INVALIDATED": ("أُلغيت", RED),
             "EXPIRED": ("انتهت بلا حسم", GREY)}
 TSTAT = {"OPEN": "مفتوحة", "PENDING": "معلّقة", "STOP": "وقف", "TARGET": "هدف", "TIME": "نهاية المدة",
@@ -105,8 +105,8 @@ def equity_html(trades: list) -> str:
     a = path(series["A"])
     area = a + f" L1000,{Y(series['A'][-1]):.1f} L1000,200 L0,200 Z"
     svg = (f"<svg viewBox='0 0 1000 200' preserveAspectRatio='none'>"
-           f"<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='{GREEN}' stop-opacity='.22'/>"
-           f"<stop offset='1' stop-color='{GREEN}' stop-opacity='0'/></linearGradient></defs>"
+           f"<defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' style='stop-color:var(--g);stop-opacity:.22'/>"
+           f"<stop offset='1' style='stop-color:var(--g);stop-opacity:0'/></linearGradient></defs>"
            f"<line x1='0' y1='{Y(0):.1f}' x2='1000' y2='{Y(0):.1f}' class='eqz'/>"
            f"<path d='{area}' fill='url(#g)'/>"
            f"<path d='{path(series['BASE'])}' class='eqbase'/>"
@@ -170,7 +170,7 @@ def focus_html(alerts: list, trades: list, cands: list) -> str:
         c = cands[0]
         d = json.loads(c["data"])
         sym, head_tag = c["symbol"], pill("أعلى مرشح", "t-grey")
-        levels = [("إبطال", d.get("invalidation"), RED), ("السعر", d.get("price"), "#0f1419"), ("الاختراق", d.get("trigger"), BLUE)]
+        levels = [("إبطال", d.get("invalidation"), RED), ("السعر", d.get("price"), "var(--txt)"), ("الاختراق", d.get("trigger"), BLUE)]
         sub = f"الدرجة {c['score']} • لم يستوفِ كل القواعد بعد" if not c["qualifies"] else f"الدرجة {c['score']} • مؤهل"
     else:
         sym = (t or al)["symbol"]
@@ -178,7 +178,7 @@ def focus_html(alerts: list, trades: list, cands: list) -> str:
             st_txt = TSTAT.get(t["status"], t["status"])
             cls = "t-green" if t["status"] == "TARGET" or (t["pnl"] or 0) > 0 else "t-red" if t["status"] == "STOP" or (t["pnl"] or 0) < 0 else "t-amber"
             head_tag = pill(f"A • {st_txt}", cls)
-            levels = [("الوقف", t["stop"], RED), ("الدخول", t["entry"], "#0f1419"), ("الاختراق", t["trigger"], BLUE),
+            levels = [("الوقف", t["stop"], RED), ("الدخول", t["entry"], "var(--txt)"), ("الاختراق", t["trigger"], BLUE),
                       ("الهدف", t["target"], GREEN)]
             if t["exit"] is not None:
                 levels.append(("الخروج", t["exit"], col(t["pnl"])))
@@ -187,7 +187,7 @@ def focus_html(alerts: list, trades: list, cands: list) -> str:
         else:
             lab, c_ = STATE_AR.get(al["state"], (al["state"], GREY))
             head_tag = pill(lab, "t-green" if c_ == GREEN else "t-red" if c_ == RED else "t-amber")
-            levels = [("إبطال", al["invalidation"], RED), ("التنبيه", al["price"], "#0f1419"), ("الاختراق", al["trigger"], BLUE)]
+            levels = [("إبطال", al["invalidation"], RED), ("التنبيه", al["price"], "var(--txt)"), ("الاختراق", al["trigger"], BLUE)]
             sub = f"تنبيه {hm_et(al['alert_utc'])} نيويورك"
         if al:
             sub += f" • الدرجة {al['score']}"
@@ -204,9 +204,9 @@ def focus_html(alerts: list, trades: list, cands: list) -> str:
         zones = ""
         ent = next((v for n, v, _ in levels if n in ("الدخول", "التنبيه", "السعر")), None)
         if stop is not None and ent is not None:
-            zones += f"<span class='zn' style='left:{P(stop):.1f}%;width:{P(ent) - P(stop):.1f}%;background:#fde2e2'></span>"
+            zones += f"<span class='zn' style='left:{P(stop):.1f}%;width:{P(ent) - P(stop):.1f}%;background:color-mix(in srgb,var(--r) 16%,transparent)'></span>"
         if tgt is not None and ent is not None:
-            zones += f"<span class='zn' style='left:{P(ent):.1f}%;width:{P(tgt) - P(ent):.1f}%;background:#dcfce7'></span>"
+            zones += f"<span class='zn' style='left:{P(ent):.1f}%;width:{P(tgt) - P(ent):.1f}%;background:color-mix(in srgb,var(--g) 16%,transparent)'></span>"
         merged = []  # دمج المستويات المتساوية (مثل الهدف = الخروج)
         for n, v, c in sorted(levels, key=lambda x: x[1]):
             if merged and abs(v - merged[-1][1]) < 1e-9:
@@ -392,7 +392,7 @@ def build(store, out_path: str, cfg: dict) -> None:
     upd_txt = "—" if not upd else (datetime.fromisoformat(upd).astimezone(I.RIYADH).strftime("%Y-%m-%d %H:%M") + " الرياض • "
                                    + datetime.fromisoformat(upd).astimezone(I.ET).strftime("%H:%M") + " نيويورك")
 
-    def tile(label, value, sub="", color="#0f1419"):
+    def tile(label, value, sub="", color="var(--txt)"):
         return f"<div class='tile'><span>{label}</span><b class='mono' style='color:{color}'>{value}</b><small>{sub}</small></div>"
 
     tiles = ("<div class='tiles'>"
@@ -400,10 +400,10 @@ def build(store, out_path: str, cfg: dict) -> None:
              + tile("متوسط السبق قبل الاختراق", "—" if not lead else f"{sum(lead) / len(lead):.0f} د", f"من {len(lead)} تنبيه تفعّل")
              + tile("نسبة الربح (A)", "—" if not closedA else f"{winsA / len(closedA):.0%}", f"{winsA} ربح / {len(closedA) - winsA} خسارة")
              + tile("أفضل صفقة", "—" if not best else f"{best['r_mult']:+.2f}R", "" if not best else f"{E(best['symbol'])} • {best['kind']}",
-                    GREEN if best and best["r_mult"] > 0 else "#0f1419")
+                    GREEN if best and best["r_mult"] > 0 else "var(--txt)")
              + tile("آخر صفقة مغلقة", "—" if not last_closed else money(last_closed["pnl"]),
                     "" if not last_closed else f"{E(last_closed['symbol'])} • {E(TSTAT.get(last_closed['status'], ''))}",
-                    col(last_closed["pnl"]) if last_closed else "#0f1419")
+                    col(last_closed["pnl"]) if last_closed else "var(--txt)")
              + "</div>")
 
     head_sub = (f"A: {len(closedA)} صفقة • {winsA} ربح / {len(closedA) - winsA} خسارة"
@@ -414,8 +414,9 @@ def build(store, out_path: str, cfg: dict) -> None:
 <div class="brand"><div class="logo">{icon('bell')}</div><div>
 <h1>التنبيه <span>المبكر</span></h1>
 <div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت 5$ • Alpaca • SEC EDGAR</div>
+<div class="thm" id="thm" role="group" aria-label="المظهر"><button data-t="light"><i style="background:#f5f6f8"></i>فاتح</button><button data-t="dark"><i style="background:#171a21"></i>داكن</button><button data-t="night"><i style="background:#0a1410"></i>ليلي</button><button data-t="blue"><i style="background:#101d40"></i>أزرق</button></div>
 </div></div>
-<div class="bal"><div class="bv mono" style="color:{col(totA) if totA else '#0f1419'}">{E(money(totA) if closedA else '0.00$')}</div>
+<div class="bal"><div class="bv mono" style="color:{col(totA) if totA else 'var(--txt)'}">{E(money(totA) if closedA else '0.00$')}</div>
 <div class="muted mono-ish">{E(head_sub)}</div></div>
 </header>
 <div class="wrap">
@@ -462,18 +463,31 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 HEAD = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>التنبيه المبكر — أسهم تحت 5$</title>
+<script>try{var t=localStorage.getItem("hu_theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--line:#e7e9ee;--txt:#0f1419;--mut:#6b7380;--g:#16a34a;--r:#dc2626;--b:#2563eb}
+:root,[data-theme=light]{--bg:#f5f6f8;--card:#fff;--line:#e7e9ee;--l2:#f1f3f6;--soft:#fafbfc;--txt:#0f1419;--mut:#6b7380;
+ --ink:#0f1419;--inkfg:#fff;--glow:#e7f6ec;--g:#16a34a;--r:#dc2626;--b:#2563eb;--a:#d97706;--nbg:#fffbeb;--nln:#fde68a;--ntx:#92400e;--sh:rgba(16,24,40,.05)}
+[data-theme=dark]{--bg:#0f1115;--card:#171a21;--line:#262b35;--l2:#1f232b;--soft:#1b1f27;--txt:#e6e8ec;--mut:#8b93a1;
+ --ink:#e6e8ec;--inkfg:#0f1115;--glow:#1c2a22;--g:#22c55e;--r:#f87171;--b:#60a5fa;--a:#fbbf24;--nbg:#221c0c;--nln:#4a3a10;--ntx:#fcd34d;--sh:rgba(0,0,0,.3)}
+[data-theme=night]{--bg:#040907;--card:#0a1410;--line:#163024;--l2:#10221a;--soft:#0d1a14;--txt:#d4f5e2;--mut:#6f9581;
+ --ink:#22c55e;--inkfg:#03100a;--glow:#0f2e1c;--g:#4ade80;--r:#fb7185;--b:#38bdf8;--a:#facc15;--nbg:#141a07;--nln:#3a4210;--ntx:#d9f99d;--sh:rgba(34,197,94,.06)}
+[data-theme=blue]{--bg:#0a1430;--card:#101d40;--line:#21325f;--l2:#18284f;--soft:#14244a;--txt:#e7eeff;--mut:#91a3cc;
+ --ink:#60a5fa;--inkfg:#08122b;--glow:#15306a;--g:#34d399;--r:#fb7185;--b:#93c5fd;--a:#fbbf24;--nbg:#13214a;--nln:#2c4385;--ntx:#bfdbfe;--sh:rgba(0,0,0,.3)}
+body,.card,.tile,.bar,.ag,.tw,nav a,nav{transition:background-color .25s,border-color .25s,color .25s}
+.thm{display:flex;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px;margin-top:8px;width:max-content}
+.thm button{border:0;background:none;color:var(--mut);font:600 12px "IBM Plex Sans Arabic",sans-serif;padding:4px 11px;border-radius:999px;cursor:pointer;display:flex;align-items:center;gap:5px}
+.thm button i{width:9px;height:9px;border-radius:50%;border:1px solid var(--line)}
+.thm button.on{background:var(--ink);color:var(--inkfg)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif}
 .mono{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;direction:ltr;unicode-bidi:isolate}
-.muted{color:var(--mut);font-size:13px}.bad{color:#b91c1c;font-size:13px}.warn{color:#b45309;font-size:13px}
+.muted{color:var(--mut);font-size:13px}.bad{color:var(--r);font-size:13px}.warn{color:var(--a);font-size:13px}
 .wrap{max-width:1280px;margin:auto;padding:0 18px 40px}
 .top{max-width:1280px;margin:auto;padding:22px 18px 14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .brand{display:flex;gap:12px;align-items:center}
-.logo{width:46px;height:46px;border-radius:50%;background:#0f1419;color:#fff;display:grid;place-items:center;box-shadow:0 0 0 4px #e7f6ec}
+.logo{width:46px;height:46px;border-radius:50%;background:var(--ink);color:var(--inkfg);display:grid;place-items:center;box-shadow:0 0 0 4px var(--glow)}
 .logo svg{width:24px;height:24px}
 h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:var(--g)}
 .st{font-size:12.5px;color:var(--mut)}
@@ -481,19 +495,19 @@ h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:va
 .dot.on{background:var(--g);box-shadow:0 0 0 0 rgba(22,163,74,.6);animation:pulse 1.8s infinite}
 @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
 .bal{text-align:left}.bv{font-size:38px;font-weight:700;line-height:1.1}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-top:14px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-top:14px;box-shadow:0 1px 2px var(--sh)}
 .ch{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
-.lab{font:700 12px/1 "JetBrains Mono","IBM Plex Sans Arabic",monospace;letter-spacing:.4px;color:#374151}
+.lab{font:700 12px/1 "JetBrains Mono","IBM Plex Sans Arabic",monospace;letter-spacing:.4px;color:var(--txt);opacity:.8}
 .lg{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px}
 .lg i{display:inline-block;width:18px;height:3px;border-radius:2px;margin-inline-start:8px}
 .la{background:var(--g)}.lb2{background:repeating-linear-gradient(90deg,var(--b) 0 5px,transparent 5px 8px)}.lc{background:repeating-linear-gradient(90deg,#9ca3af 0 2px,transparent 2px 5px)}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
-.bar button{background:#0f1419;color:#fff;border:0;border-radius:10px;padding:8px 18px;font:inherit;font-weight:600;cursor:pointer}
-.bar button:hover{background:#1f2937}.bar button:disabled{opacity:.6;cursor:wait}
+.bar button{background:var(--ink);color:var(--inkfg);border:0;border-radius:10px;padding:8px 18px;font:inherit;font-weight:600;cursor:pointer}
+.bar button:hover{opacity:.85}.bar button:disabled{opacity:.6;cursor:wait}
 .tm{display:flex;align-items:baseline;gap:8px}.tm b{font-size:22px;color:var(--g)}
 .new{color:var(--g);font-weight:600}.new a{color:var(--g)}
 .eq{position:relative;height:190px}.eq svg{width:100%;height:100%;display:block;overflow:visible}
-.eqz{stroke:#e5e7eb;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
+.eqz{stroke:var(--line);stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
 .eqa{fill:none;stroke:var(--g);stroke-width:2.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .eqb{fill:none;stroke:var(--b);stroke-width:1.6;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
 .eqbase{fill:none;stroke:#9ca3af;stroke-width:1.4;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
@@ -506,21 +520,21 @@ h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:va
 /* مدار الوكلاء */
 .orbit{position:relative;height:470px}
 .ol{position:absolute;inset:0;width:100%;height:100%}
-.ol line{stroke:#d1d5db;stroke-width:1;stroke-dasharray:2 5;vector-effect:non-scaling-stroke;transition:stroke .3s}
+.ol line{stroke:var(--line);stroke-width:1;stroke-dasharray:2 5;vector-effect:non-scaling-stroke;transition:stroke .3s}
 .ol line.on{stroke:var(--c);stroke-width:2;stroke-dasharray:none}
-.ring{position:absolute;left:50%;top:50%;border-radius:50%;transform:translate(-50%,-50%);border:1px dashed #d8e9dd}
-.r1{width:170px;height:170px}.r2{width:250px;height:250px;border-color:#eef0f3}
-.core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:122px;height:122px;border-radius:50%;background:#fff;
- border:3px solid #0f1419;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 0 0 8px #e7f6ec,0 8px 24px rgba(15,20,25,.08)}
-.cl{width:30px;height:30px;color:#0f1419}.cl svg{width:100%;height:100%}
+.ring{position:absolute;left:50%;top:50%;border-radius:50%;transform:translate(-50%,-50%);border:1px dashed var(--glow)}
+.r1{width:170px;height:170px}.r2{width:250px;height:250px;border-color:var(--l2)}
+.core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:122px;height:122px;border-radius:50%;background:var(--card);
+ border:3px solid var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 0 0 8px var(--glow),0 8px 24px var(--sh)}
+.cl{width:30px;height:30px;color:var(--ink)}.cl svg{width:100%;height:100%}
 .cb{font-size:26px;font-weight:700;line-height:1}.cs{font-size:11px;color:var(--mut)}
 .cnote{position:absolute;left:50%;top:calc(50% + 86px);transform:translateX(-50%);font-size:12px;color:var(--mut);white-space:nowrap}
-.ag{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+.ag{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
  border-radius:12px;padding:7px 10px;min-width:190px;transition:border-color .3s,box-shadow .3s,background .3s}
 .ag i{width:28px;height:28px;border-radius:8px;background:var(--c);color:#fff;display:grid;place-items:center;flex:none}.ag i svg{width:16px;height:16px}
 .ag b{display:block;font-size:12.5px;line-height:1.3}.ag small{display:block;font-size:11px;color:var(--mut);line-height:1.3}
 .ag em{font-style:normal;font-size:12px;font-weight:700;margin-inline-start:auto;color:var(--c);padding-inline-start:6px}
-.ag.on{border-color:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent);background:color-mix(in srgb,var(--c) 6%,#fff)}
+.ag.on{border-color:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent);background:color-mix(in srgb,var(--c) 8%,var(--card))}
 @media (max-width:900px){.orbit{height:auto;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:150px}
  .ol,.r2,.cnote{display:none}.r1{top:66px}.core{top:66px;width:110px;height:110px}.ag{position:static;transform:none;min-width:0}}
 @media (max-width:520px){.orbit{grid-template-columns:1fr}.bv{font-size:30px}.bal{text-align:right}}
@@ -530,7 +544,7 @@ h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:va
 .fh{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start}
 .sym{font-size:26px;font-weight:700}.fs{text-align:left}
 .ladder{position:relative;direction:ltr;height:104px;margin:14px 10px 4px}
-.track{position:absolute;left:0;right:0;top:46px;height:8px;border-radius:4px;background:#f1f3f6;overflow:hidden}
+.track{position:absolute;left:0;right:0;top:46px;height:8px;border-radius:4px;background:var(--l2);overflow:hidden}
 .zn{position:absolute;top:0;bottom:0}
 .mk{position:absolute;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;font-size:11px;color:var(--mut);white-space:nowrap}
 .mk i{position:absolute;left:50%;width:3px;height:22px;margin-left:-1.5px;background:var(--c);border-radius:2px}
@@ -539,33 +553,33 @@ h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:va
 .mk.r1{top:66px}.mk.r1 i{top:-27px}
 .parts{margin-top:12px;display:grid;gap:6px}
 .pt{display:grid;grid-template-columns:70px 1fr 52px;align-items:center;gap:8px;font-size:12.5px}
-.pb{height:7px;background:#f1f3f6;border-radius:4px;overflow:hidden}.pb i{display:block;height:100%;background:#0f1419;border-radius:4px}
+.pb{height:7px;background:var(--l2);border-radius:4px;overflow:hidden}.pb i{display:block;height:100%;background:var(--ink);border-radius:4px}
 .pt b{font-size:12px;text-align:left}
-.why{margin:12px 0 0;padding-inline-start:18px;font-size:13px}.why li{margin:2px 0}.why .rk{color:#b45309}
+.why{margin:12px 0 0;padding-inline-start:18px;font-size:13px}.why li{margin:2px 0}.why .rk{color:var(--a)}
 /* السجل */
 .log{max-height:430px;overflow:auto;margin:0 -6px}
-.lday{font-size:11px;color:#9ca3af;padding:6px;border-bottom:1px solid var(--line)}
-.lr{display:grid;grid-template-columns:44px 74px 1fr auto;gap:8px;align-items:center;padding:7px 6px;border-bottom:1px solid #f1f3f6;font-size:13px}
-.lr:hover{background:#fafbfc}.lt{font-size:11.5px;color:#9ca3af}
+.lday{font-size:11px;color:var(--mut);padding:6px;border-bottom:1px solid var(--line)}
+.lr{display:grid;grid-template-columns:44px 74px 1fr auto;gap:8px;align-items:center;padding:7px 6px;border-bottom:1px solid var(--l2);font-size:13px}
+.lr:hover{background:var(--soft)}.lt{font-size:11.5px;color:var(--mut)}
 .lb b{font-size:12.5px}.lb small{display:block;font-size:11.5px;color:var(--mut);line-height:1.4}.lv{font-size:12.5px;text-align:left}
 .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;text-align:center;white-space:nowrap}
-.t-blue{background:#e8efff;color:#1d4ed8}.t-green{background:#e3f7e9;color:#15803d}.t-red{background:#fde8e8;color:#b91c1c}
-.t-amber{background:#fdf0dc;color:#b45309}.t-grey{background:#f1f3f6;color:#4b5563}.t-dark{background:#0f1419;color:#fff}
+.t-blue{background:color-mix(in srgb,var(--b) 15%,transparent);color:var(--b)}.t-green{background:color-mix(in srgb,var(--g) 15%,transparent);color:var(--g)}.t-red{background:color-mix(in srgb,var(--r) 15%,transparent);color:var(--r)}
+.t-amber{background:color-mix(in srgb,var(--a) 16%,transparent);color:var(--a)}.t-grey{background:var(--l2);color:var(--mut)}.t-dark{background:var(--ink);color:var(--inkfg)}
 /* الجداول */
-.note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:12px;padding:10px 14px;margin:16px 0 0;font-size:13.5px}
+.note{background:var(--nbg);border:1px solid var(--nln);color:var(--ntx);border-radius:12px;padding:10px 14px;margin:16px 0 0;font-size:13.5px}
 nav{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5}
 nav a{color:var(--txt);text-decoration:none;background:var(--card);border:1px solid var(--line);padding:7px 14px;border-radius:999px;font-size:13.5px}
-nav a:hover{border-color:#0f1419}
+nav a:hover{border-color:var(--ink)}
 section{margin:22px 0 0}h2{font-size:17px;margin:6px 0}
-.tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff;margin-top:8px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card);margin-top:8px}
 table{border-collapse:collapse;width:100%;min-width:900px}
-th,td{padding:9px 11px;border-bottom:1px solid #f1f3f6;text-align:right;vertical-align:top;font-size:13px}
-th{background:#fafbfc;color:var(--mut);font-weight:600;position:sticky;top:0}tr:hover td{background:#fafbfc}
+th,td{padding:9px 11px;border-bottom:1px solid var(--l2);text-align:right;vertical-align:top;font-size:13px}
+th{background:var(--soft);color:var(--mut);font-weight:600;position:sticky;top:0}tr:hover td{background:var(--soft)}
 .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:8px 0 12px}
 .sc{margin:0;border-top:3px solid var(--ac)}.ct{color:var(--mut);font-size:13px}
 .big{font-size:26px;font-weight:700;text-align:right}
-.kv{display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #f1f3f6;padding:4px 0}.kv b{direction:ltr}
-.empty{color:var(--mut);font-size:13.5px;padding:16px;text-align:center;background:#fafbfc;border-radius:12px}
+.kv{display:flex;justify-content:space-between;font-size:13px;border-top:1px solid var(--l2);padding:4px 0}.kv b{direction:ltr}
+.empty{color:var(--mut);font-size:13.5px;padding:16px;text-align:center;background:var(--soft);border-radius:12px}
 footer{margin-top:28px;text-align:center}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style></head><body>
@@ -622,6 +636,12 @@ SCRIPT = """<script>
   var ags=[].slice.call(document.querySelectorAll('.ag')), lns=[].slice.call(document.querySelectorAll('.ol line')), k=0;
   function step(){ags.forEach(function(a,i){a.classList.toggle('on',i===k)});lns.forEach(function(l,i){l.classList.toggle('on',i===k)});k=(k+1)%(ags.length||1);}
   if(ags.length){step();setInterval(step,1500);}
+  // المظهر: فاتح / داكن / ليلي / أزرق — يُحفظ في هذا المتصفح
+  var root=document.documentElement, tb=[].slice.call(document.querySelectorAll('#thm button'));
+  function setT(t){root.setAttribute('data-theme',t);tb.forEach(function(b){b.classList.toggle('on',b.getAttribute('data-t')===t)});
+    try{localStorage.setItem('hu_theme',t)}catch(e){}}
+  tb.forEach(function(b){b.onclick=function(){setT(b.getAttribute('data-t'))}});
+  setT(root.getAttribute('data-theme')||'light');
   tick(); setInterval(tick,1000); poll(); setInterval(poll,60000);
 })();
 </script>
