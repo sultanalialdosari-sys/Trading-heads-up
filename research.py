@@ -33,6 +33,8 @@ OUT = os.environ.get("RESEARCH_OUT", os.path.join(BASE, "research_out"))
 START = datetime(2016, 1, 1, tzinfo=timezone.utc)
 TRAIN_END = 2022           # تدريب ≤ 2022 • اختبار ≥ 2023
 N_EVENTS = int(os.environ.get("RESEARCH_EVENTS", "6000"))
+MODE = os.environ.get("RESEARCH_MODE", "full")          # full | intraday (يعيد أحداث الجولة الأولى مع طرق خروج وأخبار)
+WITH_NEWS = os.environ.get("RESEARCH_NEWS", "1") == "1"
 EXCH = {"NASDAQ", "NYSE", "AMEX", "ARCA", "BATS"}
 LOG = []
 
@@ -284,6 +286,32 @@ def sim_trade(day: pd.DataFrame, j: int, entry: float, stop: float, target: floa
     return float(day.iloc[-1].close), "TIME"
 
 
+EXITS = {"p5_10": (0.05, 0.10), "p8_16": (0.08, 0.16), "p10_30": (0.10, 0.30)}
+
+
+def bracket(day: pd.DataFrame, j: int, entry: float, stop: float, target: float) -> float:
+    """عائد % لصفقة بوقف وهدف ثابتين (الوقف أولاً عند التعارض، فجوة الافتتاح بسعرها، خروج 15:55)."""
+    ex, _ = sim_trade(day, j, entry, stop, target)
+    return ex / entry - 1
+
+
+def news_items(c, sym: str, day) -> list:
+    """أخبار السهم من إغلاق أمس حتى نهاية الجلسة (لكل صف نستخدم فقط ما نُشر قبل وقت القرار)."""
+    d0 = datetime(day.year, day.month, day.day, tzinfo=I.ET)
+    params = {"symbols": sym, "start": I.iso((d0 - timedelta(hours=8)).astimezone(I.UTC)),
+              "end": I.iso((d0 + timedelta(hours=16)).astimezone(I.UTC)), "limit": 50, "sort": "asc"}
+    try:
+        raw = c._get(I.DATA_BASE, "/v1beta1/news", params).get("news") or []
+    except I.ApiError:
+        return None
+    from hu import news as N
+    out = []
+    for it in I.normalize_news(raw) or []:
+        if it.get("time_utc"):
+            out.append((it["time_utc"], N.classify(it), it["headline"][:120]))
+    return out
+
+
 def first_touch(day: pd.DataFrame, j: int, px: float, up: float, dn: float) -> float:
     for k in range(j + 1, len(day)):
         r = day.iloc[k]
@@ -315,6 +343,7 @@ def intraday_study(c, events) -> pd.DataFrame:
                 continue
             idx_day = np.where(d5.index.date == day)[0]
             day_df = d5.iloc[idx_day]
+            nitems = news_items(c, sym, day) if WITH_NEWS else None
             prev_c = float(d5[d5.index.date == dates[-2]].close.iloc[-1])
             for j_local in range(len(day_df)):
                 ts = day_df.index[j_local]
@@ -334,6 +363,21 @@ def intraday_study(c, events) -> pd.DataFrame:
                        "rsi": st.rsi, "dist_res_pct": st.dist_res_pct, "day_change_pct": st.day_change_pct,
                        "dollar_volume": st.dollar_volume}
                 row["hit10_before5"] = first_touch(day_df, j_local, px, 0.10, 0.05)
+                ent = px * 1.005
+                for name, (sl, tp) in EXITS.items():
+                    row[f"x_{name}"] = bracket(day_df, j_local, ent, ent * (1 - sl), ent * (1 + tp))
+                atr5 = float(d5.atr.iloc[i]) if not math.isnan(d5.atr.iloc[i]) else None
+                if atr5:
+                    row["x_atr3"] = bracket(day_df, j_local, ent, ent - 3 * atr5, ent + 6 * atr5)
+                    row["atr5_pct"] = atr5 / px
+                ex_c, _ = sim_trade(day_df, j_local, ent, -1.0, 1e9)
+                row["x_close"] = ex_c / ent - 1
+                if nitems is not None:
+                    t_dec = ts.to_pydatetime() + timedelta(minutes=5)
+                    kinds = [k for t, k, _ in nitems if t <= t_dec]
+                    row["news_n"] = len(kinds)
+                    row["news_best"] = ("RISK" if "RISK" in kinds else "MATERIAL" if "MATERIAL" in kinds else
+                                        "PROMO" if "PROMO" in kinds else "OTHER" if kinds else "NONE")
                 rest = day_df.iloc[j_local + 1:]
                 row["ret_close"] = float(rest.close.iloc[-1] / px - 1) if len(rest) else 0.0
                 row["mfe"] = float(rest.high.max() / px - 1) if len(rest) else 0.0
@@ -386,6 +430,15 @@ def main():
     summary = {"generated_utc": datetime.now(timezone.utc).isoformat(), "start": START.date().isoformat(),
                "train_end_year": TRAIN_END}
     try:
+        if MODE == "intraday":
+            prev = pd.read_csv(os.path.join(OUT, "intraday_rows.csv.gz"), usecols=["symbol", "date"]).drop_duplicates()
+            events = [(r.symbol, datetime.strptime(r.date, "%Y-%m-%d").date(), 0.0) for r in prev.itertuples()]
+            log(f"إعادة الأحداث السابقة مع طرق خروج وأخبار: {len(events)}")
+            x = intraday_study(c, events)
+            x.to_csv(os.path.join(OUT, "intraday_rows_v2.csv.gz"), index=False, compression="gzip")
+            summary["intraday_v2"] = summarize_intraday(x)
+            summary["intraday_rows_v2"] = int(len(x))
+            raise StopIteration
         dres, ddf = daily_study(c, end)
         summary["daily"] = dres
         log(f"الجزء 1 انتهى في {(time.time() - t0) / 60:.0f} د")
@@ -396,13 +449,16 @@ def main():
         x.to_csv(os.path.join(OUT, "intraday_rows.csv.gz"), index=False, compression="gzip")
         summary["intraday"] = summarize_intraday(x)
         summary["intraday_rows"] = int(len(x))
+    except StopIteration:
+        pass
     except Exception as e:
         log("خطأ:", type(e).__name__, e)
         log(traceback.format_exc()[-1500:])
     summary["api_calls"] = c.call_count
     summary["minutes"] = round((time.time() - t0) / 60, 1)
     summary["log"] = LOG[-200:]
-    with open(os.path.join(OUT, "results.json"), "w", encoding="utf-8") as f:
+    name = "results_v2.json" if MODE == "intraday" else "results.json"
+    with open(os.path.join(OUT, name), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1, default=str)
     log(f"انتهى في {summary['minutes']} دقيقة • طلبات {c.call_count}")
 

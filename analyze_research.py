@@ -65,11 +65,14 @@ def main(res_path: str, rows_path: str, out_md: str):
     findings = {}
     if d:
         L += ["## 1) الدراسة اليومية: ما الذي يسبق قفزة اليوم التالي؟",
-              f"صفوف (سهم × يوم): {d['rows']:,} من {d['symbols']:,} سهماً (مدرجة ومشطوبة).",
+              f"صفوف (سهم × يوم): {int(d['rows']):,} من {int(d['symbols']):,} سهماً (مدرجة ومشطوبة).",
               f"- نسبة الأساس لأن يرتفع السهم 20%+ في اليوم التالي (من الإغلاق إلى قمة الغد): تدريب {d['base']['y_up20_next']['train']:.1%} • اختبار {d['base']['y_up20_next']['test']:.1%}",
               f"- نسبة الأساس لـ 30%+ خلال 5 أيام: تدريب {d['base']['y_up30_5d']['train']:.1%} • اختبار {d['base']['y_up30_5d']['test']:.1%}",
               f"- متوسط عائد اليوم التالي (إغلاق لإغلاق): تدريب {d['r1_mean']['train']:+.2%} • اختبار {d['r1_mean']['test']:+.2%}", ""]
         lt = pd.DataFrame(d["lift_up20_next"])
+        for c_ in ("n_train", "n_test", "rate_train", "rate_test", "lift_train", "lift_test", "r1_test_mean", "r1_test_median"):
+            if c_ in lt:
+                lt[c_] = pd.to_numeric(lt[c_], errors="coerce")
         if len(lt):
             lt["consistent"] = (lt.lift_train >= 1.3) & (lt.lift_test >= 1.3)
             lt["neg"] = (lt.lift_train <= 0.7) & (lt.lift_test <= 0.7)
@@ -85,6 +88,7 @@ def main(res_path: str, rows_path: str, out_md: str):
         for t in ("y_up20_next", "y_up30_5d"):
             m = d.get(f"model_{t}")
             if m:
+                m = {k: (float(v) if isinstance(v, str) and k != "importance" else v) for k, v in m.items()}
                 L += [f"### نموذج يجمع كل المؤشرات ({'قفزة 20% غداً' if t == 'y_up20_next' else '30% خلال 5 أيام'}) — على سنوات لم يرها",
                       f"- AUC = {m['auc_test']} (0.5 = صدفة)",
                       f"- أعلى 1% من التوقعات: {m['top_1%']:.1%} مقابل الأساس {m['base_test']:.1%} • أعلى 5%: {m['top_5%']:.1%}",

@@ -8,6 +8,11 @@ on:
       events:
         description: "عدد أيام العينة داخل اليوم"
         default: "6000"
+      mode:
+        description: "full = الدراسة كاملة • intraday = إعادة أيام الجولة الأولى مع طرق خروج وأخبار"
+        type: choice
+        options: [full, intraday]
+        default: full
 
 permissions:
   contents: write
@@ -27,8 +32,17 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt scikit-learn
+      - name: Previous results
+        run: |
+          mkdir -p research_out
+          if git fetch --depth=1 origin +refs/heads/research:refs/remotes/origin/research; then
+            for f in results.json intraday_rows.csv.gz results_v2.json intraday_rows_v2.csv.gz; do
+              git show origin/research:$f > research_out/$f 2>/dev/null || rm -f research_out/$f
+            done
+          fi
       - name: Research
         env:
+          RESEARCH_MODE: ${{ inputs.mode }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
           RESEARCH_EVENTS: ${{ inputs.events }}
@@ -42,6 +56,7 @@ jobs:
           import sys; sys.path.insert(0, ".")
           from hu import gitdata
           import os
-          files = {n: os.path.join("research_out", n) for n in ("results.json", "intraday_rows.csv.gz")}
+          names = ("results.json", "intraday_rows.csv.gz", "results_v2.json", "intraday_rows_v2.csv.gz")
+          files = {n: os.path.join("research_out", n) for n in names if os.path.exists(os.path.join("research_out", n))}
           print(gitdata.publish(".", files, "research results", branch="research"))
           EOF
