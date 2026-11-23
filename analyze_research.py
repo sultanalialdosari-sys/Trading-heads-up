@@ -158,3 +158,62 @@ def main(res_path: str, rows_path: str, out_md: str):
 
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "research_report.md")
+
+
+# ====================================================================== الجولة الثانية: طرق الخروج والأخبار
+XCOLS = {"trade_pct": "الحالي (وقف عند الإبطال، هدف 2R)", "x_p5_10": "وقف 5% / هدف 10%", "x_p8_16": "وقف 8% / هدف 16%",
+         "x_p10_30": "وقف 10% / هدف 30%", "x_atr3": "وقف 3×ATR / هدف 6×ATR", "x_close": "بلا وقف — خروج 15:55"}
+
+
+def xstats(g: pd.DataFrame, col: str) -> dict:
+    v = g[col].dropna()
+    if len(v) < 20:
+        return {"n": int(len(v))}
+    return {"n": int(len(v)), "avg": round(float(v.mean()) * 100, 2), "win": round(float((v > 0).mean()), 3),
+            "se": round(float(v.std() / math.sqrt(len(v))) * 100, 2)}
+
+
+def groups(x: pd.DataFrame) -> dict:
+    e = x[x.stage == "EARLY"]
+    return {
+        "كل اللحظات (الأساس)": x,
+        "يستوفي القواعد الحالية": x[x.qualifies == 1],
+        "زخم: RVOL ≥ 5": x[x.rvol >= 5],
+        "زخم: RVOL ≥ 5 وارتفاع اليوم 5–25%": x[(x.rvol >= 5) & x.day_change_pct.between(5, 25)],
+        "زخم + فوق VWAP + RSI ≥ 55": x[(x.rvol >= 5) & x.day_change_pct.between(5, 25) & (x.above_vwap == 1) & (x.rsi >= 55)],
+        "مبكرة: RVOL ≥ 3 ومسافة للمقاومة ≤ 3% وتماسك": e[(e.rvol >= 3) & (e.dist_res_pct <= 3) & (e.range_atr <= 3)],
+        "خبر جوهري قبل القرار": x[x.get("news_best", pd.Series(index=x.index, dtype=object)) == "MATERIAL"],
+        "خبر ترويجي قبل القرار": x[x.get("news_best", pd.Series(index=x.index, dtype=object)) == "PROMO"],
+        "خبر مخاطرة قبل القرار": x[x.get("news_best", pd.Series(index=x.index, dtype=object)) == "RISK"],
+        "بلا أخبار": x[x.get("news_best", pd.Series(index=x.index, dtype=object)) == "NONE"],
+        "زخم RVOL ≥ 5 + خبر جوهري": x[(x.rvol >= 5) & (x.get("news_best", pd.Series(index=x.index, dtype=object)) == "MATERIAL")],
+    }
+
+
+def report_v2(rows_path: str) -> list:
+    x = pd.read_csv(rows_path)
+    tr, te = x[x.year <= TRAIN_END], x[x.year > TRAIN_END]
+    L = ["## 3) الجولة الثانية: طرق الخروج وأثر الأخبار (نفس الأيام، متوسط العائد % لكل صفقة بعد انزلاق 0.5%)", ""]
+    cols = [c for c in XCOLS if c in x.columns]
+    L.append("| المجموعة | الفترة | " + " | ".join(XCOLS[c] for c in cols) + " |")
+    L.append("|---|---|" + "---|" * len(cols))
+    gtr, gte = groups(tr), groups(te)
+    out = {}
+    for name in gtr:
+        for per, g in (("تدريب", gtr[name]), ("اختبار", gte[name])):
+            cells = []
+            for c in cols:
+                s = xstats(g, c)
+                out.setdefault(name, {}).setdefault(per, {})[c] = s
+                cells.append("—" if "avg" not in s else f"{s['avg']:+.2f}% (ربح {s['win']:.0%}، n={s['n']:,})")
+            L.append(f"| {name} | {per} | " + " | ".join(cells) + " |")
+    L.append("")
+    return L, out
+
+
+if __name__ == "__main__" and len(sys.argv) > 4:
+    L, out = report_v2(sys.argv[4])
+    with open(sys.argv[3], "a", encoding="utf-8") as f:
+        f.write("\n\n" + "\n".join(L))
+    json.dump(out, open(sys.argv[3].replace(".md", "_v2.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    print("\n".join(L))

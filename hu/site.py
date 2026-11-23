@@ -461,6 +461,14 @@ def build(store, out_path: str, cfg: dict) -> None:
 </div>
 <div class="note">البيانات من Alpaca المجانية: السوق الكامل متأخر 15 دقيقة، والسعر اللحظي من IEX فقط (جزء صغير من التداول).
 Float غير متوفر مجاناً. التنبيهات ليست توصية شراء، والصفقات افتراضية فقط. النظام لا يكتشف كل انفجار — راجع قسم «فاتت».</div>
+<div class="card" id="study"><div class="ch"><span class="lab">ما تقوله الدراسة التاريخية (2016 → 2026، 3,730 سهماً تحت 5$)</span>
+<a class="muted" href="https://github.com/sultanalialdosari-sys/Trading-heads-up/blob/main/research/REPORT.md" target="_blank" rel="noopener">التقرير الكامل</a></div>
+<ul class="study">
+<li><b>المؤشرات تتنبأ بحجم الحركة لا باتجاهها:</b> التذبذب العالي وRVOL ≥ 5× يرفعان احتمال قفزة 20% غداً من 3% إلى 29%، لكن متوسط عائد الغد قريب من الصفر — تتحرك بعنف في الاتجاهين.</li>
+<li><b>التنبيه المبكر الحالي لم يتفوق بشكل موثوق</b> على الدخول العشوائي تاريخياً (−0.22R مقابل −0.33R في سنوات الاختبار). الوقف الضيق تحت التماسك يُضرب كثيراً.</li>
+<li><b>أفضل ما وُجد:</b> سهم بدأ يتحرك (RVOL ≥ 5 وارتفاع 5–25%) مع وقف أوسع — موجب قليلاً في الفترتين، لكنه داخل هامش الخطأ.</li>
+<li>لذلك: التنبيهات هنا <b>للمراقبة لا للتنبؤ</b>، والحكم الحقيقي من النتائج الحية في الأسفل.</li>
+</ul></div>
 <nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
 <section id="cands"><h2>المرشحون في آخر فحص — {E(PHASE_LABEL.get(last_phase, ''))} ({E(t_et(last_scan['started_utc']) if last_scan else '—')} الرياض)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
@@ -601,6 +609,7 @@ th{background:var(--soft);color:var(--mut);font-weight:600;position:sticky;top:0
 .kv{display:flex;justify-content:space-between;font-size:13px;border-top:1px solid var(--l2);padding:4px 0}.kv b{direction:ltr}
 .empty{color:var(--mut);font-size:13.5px;padding:16px;text-align:center;background:var(--soft);border-radius:12px}
 footer{margin-top:28px;text-align:center}
+.study{margin:6px 0 0;padding-inline-start:20px;line-height:1.9;font-size:14px}.study li{margin:2px 0}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style></head><body>
 """
