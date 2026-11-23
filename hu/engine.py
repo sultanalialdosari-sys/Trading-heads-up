@@ -142,6 +142,14 @@ class Engine:
                  notifier: Optional[I.TelegramNotifier] = None, log=print):
         self.c, self.db, self.cfg, self.sec, self.tg, self.log = client, store, cfg, sec, notifier, log
         self.errors: List[str] = []
+        self.timing: Dict[str, float] = {}
+        self._tm = time.time()
+
+    def lap(self, name: str) -> None:
+        """توقيت كل مرحلة (لمعرفة أين يذهب الوقت)."""
+        t = time.time()
+        self.timing[name] = round(self.timing.get(name, 0) + t - self._tm, 1)
+        self._tm = t
 
     def send(self, text: str) -> bool:
         if self.tg is None or not self.tg.ready:
@@ -194,10 +202,12 @@ class Engine:
             except I.ApiError as e:
                 self.errors.append(f"{kind}: " + e.message)
         # متابعة كل الصفقات والتنبيهات المفتوحة لهذا اليوم
+        self.lap("scan")
         try:
             self.follow(now, day, final=(kind == "final"))
         except I.ApiError as e:
             self.errors.append("follow: " + e.message)
+        self.lap("follow")
         if kind == "final":
             if not snap_df.empty:
                 self.missed(day, snap_df)
@@ -207,6 +217,8 @@ class Engine:
             self.db.db.execute("DELETE FROM candidates WHERE day < ? AND qualifies = 0", (old,))
             self.db.db.execute("DELETE FROM runs WHERE started_utc < ? AND alerts = 0 AND (errors IS NULL OR errors = '')",
                                ((now - timedelta(days=14)).isoformat(),))
+        self.lap("rest")
+        info["timing"] = json.dumps(self.timing, ensure_ascii=False)
         info["api_calls"] = I.API_STATS["total"] - calls0
         info["sec_calls"] = self.sec.calls
         info["duration_sec"] = round(time.time() - t0, 1)
@@ -226,13 +238,17 @@ class Engine:
         syms = list(sl.symbol)
         if not syms:
             return
+        self.lap("sweep")
         cache = I.BarCache(hybrid=True)
         b5, _ = cache.get(self.c, syms)
+        self.lap("bars5m")
         try:
             daily = self.c.bars(syms, "1Day", now - timedelta(days=45), now - timedelta(minutes=16), feed="sip")
         except I.ApiError:
             daily = {}
+        self.lap("daily")
         live = self.c.snapshots(syms)                       # IEX لحظي
+        self.lap("live")
         meta = sl.set_index("symbol")
         setups: List[RL.Setup] = []
         for s in syms:
