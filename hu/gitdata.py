@@ -31,8 +31,8 @@ def restore(repo: str, files: Dict[str, str]) -> bool:
     return True
 
 
-def publish(repo: str, files: Dict[str, str], message: str = "") -> str:
-    """يكتب الملفات في التزام يتيم واحد ويدفعه بالقوة إلى فرع data."""
+def publish(repo: str, files: Dict[str, str], message: str = "", branch: str = "data") -> str:
+    """يكتب الملفات في التزام يتيم واحد ويدفعه بالقوة إلى الفرع (data افتراضياً)."""
     lines = []
     for name, path in files.items():
         if os.path.exists(path):
@@ -48,7 +48,7 @@ def publish(repo: str, files: Dict[str, str], message: str = "") -> str:
     commit = r.stdout.decode().strip()
     last = None
     for _ in range(3):
-        r = subprocess.run(["git", "push", "-f", "origin", f"{commit}:refs/heads/data"], cwd=repo, capture_output=True)
+        r = subprocess.run(["git", "push", "-f", "origin", f"{commit}:refs/heads/{branch}"], cwd=repo, capture_output=True)
         if r.returncode == 0:
             return commit
         last = r.stderr.decode(errors="ignore")[:200]

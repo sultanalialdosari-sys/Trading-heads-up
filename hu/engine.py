@@ -152,7 +152,9 @@ class Engine:
         return ok
 
     # ---------------------------------------------------------------- scan
-    def run(self, kind: str = "scan", scheduled_utc: Optional[datetime] = None) -> dict:
+    def run(self, kind: str = "scan", scheduled_utc: Optional[datetime] = None, sweep_cache: Optional[dict] = None) -> dict:
+        """sweep_cache: {"df", "at", "note"} — لقطة السوق الكامل متأخرة 15 دقيقة أصلاً، فلا داعي لإعادة مسح
+        كل الأسهم (≈130 طلباً) كل 5 دقائق؛ نعيد استخدامها حتى 14 دقيقة، والتحليل اللحظي للقائمة القصيرة يتجدد كل مرة."""
         t0 = time.time()
         clock, clock_err = {}, None
         try:
@@ -172,7 +174,14 @@ class Engine:
         snap_df = pd.DataFrame()
         if info["market_open"] or kind in ("final", "pre", "post"):
             try:
-                snap_df, info["feed_note"] = sweep(self.c, self.cfg, now)
+                fresh = (sweep_cache is not None and sweep_cache.get("df") is not None and sweep_cache.get("kind") == kind
+                         and (now - sweep_cache["at"]).total_seconds() < 14 * 60)
+                if fresh:
+                    snap_df, info["feed_note"] = sweep_cache["df"], sweep_cache["note"] + " (لقطة مُعاد استخدامها)"
+                else:
+                    snap_df, info["feed_note"] = sweep(self.c, self.cfg, now)
+                    if sweep_cache is not None:
+                        sweep_cache.update(df=snap_df, at=now, note=info["feed_note"], kind=kind)
                 info["swept"] = len(snap_df)
                 info["universe"] = snap_df.attrs.get("universe", 0)
             except I.ApiError as e:

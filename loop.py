@@ -81,7 +81,8 @@ def main() -> int:
     print("الأسرار:", " • ".join(f"{n} {'✅' if os.environ.get(n, '').strip() else '❌'}" for n in names))
 
     store = Store(DB)
-    last_pub, dirty, final_done = 0.0, False, False
+    last_pub, dirty, final_done = -1e9, False, False
+    sweep_cache: dict = {}
     session = None
 
     def publish(force=False):
@@ -133,7 +134,7 @@ def main() -> int:
             if ph in ("PRE", "REG", "POST"):
                 kind = {"PRE": "pre", "REG": "scan", "POST": "post"}[ph]
                 slot = et.replace(second=0, microsecond=0)
-                info = Engine(client, store, cfg, sec, tg).run(kind, slot.astimezone(I.UTC))
+                info = Engine(client, store, cfg, sec, tg).run(kind, slot.astimezone(I.UTC), sweep_cache=sweep_cache)
                 dirty = True
                 print(f"{et:%H:%M} ET {kind}: مرشحون {info.get('shortlist')} • مؤهلون {info.get('qualified')} • "
                       f"تنبيهات {info.get('alerts')} • طلبات {info.get('api_calls')} • {info.get('duration_sec')} ث"
