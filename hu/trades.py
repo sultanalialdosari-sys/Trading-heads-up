@@ -43,7 +43,7 @@ def simulate(t: dict, bars: pd.DataFrame, cut_utc: datetime, slippage_pct: float
     else:
         b = bars[(bars.index >= pd.Timestamp(created).ceil("min")) & (bars.index < pd.Timestamp(end))]
     kind = t["kind"]
-    status = "PENDING" if kind == "B" else "OPEN"
+    status = "PENDING" if kind in ("B", "PRE", "POST") else "OPEN"
     entry, stop, target = t.get("entry"), t["stop"], t.get("target")
     entry_utc = t.get("entry_utc")
     exit_px = exit_utc = None
@@ -85,7 +85,7 @@ def simulate(t: dict, bars: pd.DataFrame, cut_utc: datetime, slippage_pct: float
         if status == "OPEN":
             last = b.iloc[-1] if b is not None and not b.empty else None
             exit_px = float(last["close"]) if last is not None else entry
-            exit_utc, status, note = ex_t.isoformat(), "TIME", "خروج بنهاية المدة (15:55 نيويورك)"
+            exit_utc, status, note = ex_t.isoformat(), "TIME", "خروج بنهاية المدة (قبل الإغلاق بـ5 دقائق)"
         else:
             status, note = "EXPIRED", "لم يخترق المستوى حتى نهاية اليوم"
     out.update(status=status, entry=entry, entry_utc=entry_utc, target=target, note=note,
@@ -101,6 +101,8 @@ def simulate(t: dict, bars: pd.DataFrame, cut_utc: datetime, slippage_pct: float
 def alert_events(alert: dict, bars: pd.DataFrame, cut_utc: datetime) -> dict:
     """متى تفعّلت الفكرة (اختراق المستوى) أو أُبطلت — من شموع جاءت بعد التنبيه فقط."""
     created = datetime.fromisoformat(alert["alert_utc"])
+    if alert.get("eval_from"):                       # قوائم ما قبل/بعد الجلسة: تُقاس من الجلسة النظامية فقط
+        created = max(created, datetime.fromisoformat(alert["eval_from"]))
     end = min(cut_utc, exit_time(alert["day"]).astimezone(I.UTC))
     if bars is None or bars.empty:
         return {}

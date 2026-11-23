@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """نقطة التشغيل (GitHub Actions أو جهازك).
 
-  python run.py            فحص عادي (كل 15 دقيقة أثناء الجلسة)
-  python run.py --final    تشغيل ما بعد الإغلاق: إغلاق الصفقات، «فاتت»، ملخص اليوم
-  python run.py --site     إعادة بناء الموقع فقط
+  python loop.py           المشغّل المستمر (هو ما يعمل على GitHub كل يوم)
+  python run.py            فحص واحد للجلسة
+  python run.py --pre      فحص واحد لما قبل الافتتاح      python run.py --post   فحص واحد لما بعد الإغلاق
+  python run.py --final    إغلاق اليوم: إغلاق الصفقات، «فاتت»، ملخص اليوم
+  python run.py --site     بناء الموقع فقط من قاعدة البيانات (يجلبها من فرع data إذا وُجد)
 
 المفاتيح من متغيرات البيئة فقط:
   ALPACA_API_KEY, ALPACA_API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SEC_USER_AGENT ("الاسم email@example.com")
@@ -17,7 +19,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
 import intraday as I  # noqa: E402
-from hu import site  # noqa: E402
+from hu import gitdata, site  # noqa: E402
 from hu.engine import Engine, load_cfg  # noqa: E402
 from hu.sec import SecClient  # noqa: E402
 from hu.store import Store  # noqa: E402
@@ -37,6 +39,10 @@ def scheduled_time(now: datetime, minutes) -> datetime:
 
 def main(argv) -> int:
     cfg = load_cfg(os.path.join(BASE, "config.json"))
+    files = {"headsup.db": os.path.join(DATA, "headsup.db"), "report.md": os.path.join(DATA, "report.md")}
+    in_actions = bool(os.environ.get("GITHUB_ACTIONS"))
+    if in_actions:
+        gitdata.restore(BASE, files)
     store = Store(os.path.join(DATA, "headsup.db"))
     if "--site" in argv:
         site.build(store, os.path.join(DOCS, "index.html"), cfg)
@@ -49,11 +55,13 @@ def main(argv) -> int:
     client = I.AlpacaClient(key, secret, I.Config())
     tg = I.TelegramNotifier(os.environ.get("TELEGRAM_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""))
     sec = SecClient(cache_dir=DATA)
-    kind = "final" if "--final" in argv else "scan"
+    kind = "final" if "--final" in argv else "pre" if "--pre" in argv else "post" if "--post" in argv else "scan"
     now = datetime.now(timezone.utc)
     # التشغيل اليدوي ليس له موعد، فلا نحسب له تأخيراً
     manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
     sched = None if manual else scheduled_time(now, [40] if kind == "final" else [2, 17, 32, 47])
+    if kind != "scan":
+        sched = None
     # فحص وجود الأسرار (الأسماء فقط — لا تُطبع القيم أبداً)
     names = ["ALPACA_API_KEY", "ALPACA_API_SECRET", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_USER_AGENT"]
     print("الأسرار:", " • ".join(f"{n} {'✅' if os.environ.get(n, '').strip() else '❌ فارغ/غير موجود'}" for n in names))
@@ -64,6 +72,9 @@ def main(argv) -> int:
     info = eng.run(kind, sched)
     site.build(store, os.path.join(DOCS, "index.html"), cfg)
     store.close()
+    if in_actions:
+        gitdata.publish(BASE, files)
+        gitdata.dispatch_site(BASE)
     print({k: info.get(k) for k in ("kind", "market_open", "swept", "shortlist", "qualified", "alerts", "delay_min", "api_calls", "errors")})
     if not tg.ready:
         print("ℹ️ تيليجرام غير مضبوط — لن تُرسل تنبيهات")

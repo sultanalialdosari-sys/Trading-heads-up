@@ -39,6 +39,13 @@ class Store:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(alerts)")}
+        for c, t in (("eval_from", "TEXT"), ("eval_until", "TEXT"), ("phase", "TEXT")):
+            if c not in cols:
+                self.db.execute(f"ALTER TABLE alerts ADD COLUMN {c} {t}")
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(candidates)")}
+        if "phase" not in cols:
+            self.db.execute("ALTER TABLE candidates ADD COLUMN phase TEXT")
 
     def q(self, sql: str, args=()) -> list:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]

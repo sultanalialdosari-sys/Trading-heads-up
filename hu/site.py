@@ -21,7 +21,8 @@ STATE_AR = {"OPEN": ("مفتوحة", AMBER), "ACTIVATED": ("تفعّلت", GREEN
             "EXPIRED": ("انتهت بلا حسم", GREY)}
 TSTAT = {"OPEN": "مفتوحة", "PENDING": "معلّقة", "STOP": "وقف", "TARGET": "هدف", "TIME": "نهاية المدة",
          "EXPIRED": "لم تُنفّذ", "CANCELLED": "أُلغيت قبل التنفيذ"}
-KIND = {"A": "A عند التنبيه", "B": "B عند الاختراق", "BASE": "مقارنة"}
+KIND = {"A": "A عند التنبيه", "B": "B عند الاختراق", "BASE": "مقارنة", "PRE": "قائمة قبل الافتتاح", "POST": "قائمة بعد الإغلاق"}
+PHASE_LABEL = {"PRE": "ما قبل الافتتاح", "POST": "بعد الإغلاق", "REG": "الجلسة", None: "الجلسة"}
 PARTS_MAX = [("الحجم", 30), ("التماسك", 35), ("الاتجاه", 20), ("الزخم", 5), ("الأخبار", 10)]
 
 
@@ -29,11 +30,11 @@ PARTS_MAX = [("الحجم", 30), ("التماسك", 35), ("الاتجاه", 20),
 def t_et(iso):
     if not iso:
         return "—"
-    return datetime.fromisoformat(iso).astimezone(I.ET).strftime("%m-%d %H:%M")
+    return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%m-%d %H:%M")   # بتوقيت الرياض
 
 
 def hm_et(iso):
-    return "—" if not iso else datetime.fromisoformat(iso).astimezone(I.ET).strftime("%H:%M")
+    return "—" if not iso else datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
 
 
 def money(v):
@@ -182,13 +183,13 @@ def focus_html(alerts: list, trades: list, cands: list) -> str:
                       ("الهدف", t["target"], GREEN)]
             if t["exit"] is not None:
                 levels.append(("الخروج", t["exit"], col(t["pnl"])))
-            sub = (f"دخول {hm_et(t['entry_utc'])} نيويورك • {t['shares']} سهم"
+            sub = (f"دخول {hm_et(t['entry_utc'])} الرياض • {t['shares']} سهم"
                    + (f" • <b style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>" if t["pnl"] is not None else ""))
         else:
             lab, c_ = STATE_AR.get(al["state"], (al["state"], GREY))
             head_tag = pill(lab, "t-green" if c_ == GREEN else "t-red" if c_ == RED else "t-amber")
             levels = [("إبطال", al["invalidation"], RED), ("التنبيه", al["price"], "var(--txt)"), ("الاختراق", al["trigger"], BLUE)]
-            sub = f"تنبيه {hm_et(al['alert_utc'])} نيويورك"
+            sub = f"تنبيه {hm_et(al['alert_utc'])} الرياض"
         if al:
             sub += f" • الدرجة {al['score']}"
     levels = [(n, v, c) for n, v, c in levels if v is not None]
@@ -335,6 +336,22 @@ def build(store, out_path: str, cfg: dict) -> None:
     core_note = ("آخر إشارة: <b class='mono'>" + E(la["symbol"]) + "</b> " + STATE_AR.get(la["state"], (la["state"], ""))[0]
                  if la else "لا إشارات بعد")
 
+    last_phase = cands[0].get("phase") if cands else None
+    early_alerts = [a for a in alerts if (a.get("kind") or "EARLY") == "EARLY"]
+    ext_alerts = [a for a in alerts if a.get("kind") in ("PRE", "POST")]
+    tr_by_alert = {t["alert_id"]: t for t in trades if t["kind"] in ("PRE", "POST")}
+    xrow = []
+    for a in ext_alerts:
+        lab, c_ = STATE_AR.get(a["state"], (a["state"], GREY))
+        t = tr_by_alert.get(a["id"]) or {}
+        xrow.append([E(a["day"]), pill("قبل الافتتاح" if a["kind"] == "PRE" else "بعد الإغلاق", "t-blue"), t_et(a["alert_utc"]),
+                     f"<b class='mono'>{E(a['symbol'])}</b>", f"{a['gain_from_open']:+.1f}%" if a["gain_from_open"] is not None else "—",
+                     str(a["score"]), I.fmt_price(a["price"]), I.fmt_price(a["trigger"]), I.fmt_price(a["invalidation"]),
+                     f"<b style='color:{c_}'>{lab}</b>", E(TSTAT.get(t.get("status"), "—")),
+                     f"<b class='mono' style='color:{col(t.get('pnl'))}'>{money(t.get('pnl'))}</b>"])
+    ext_html = table(["الجلسة", "الفترة", "وقت التنبيه (الرياض)", "السهم", "التحرك", "الدرجة", "السعر", "التفعيل (القمة)",
+                      "الإبطال", "الحالة في الجلسة", "الصفقة", "النتيجة"], xrow)
+
     # ---- الجداول
     crow = []
     for c in cands[:60]:
@@ -343,25 +360,28 @@ def build(store, out_path: str, cfg: dict) -> None:
         why = "<br>".join(E(x) for x in d.get("reasons", [])[:5])
         bad = "<br>".join(E(x) for x in (d.get("excluded", []) + d.get("gates_failed", []))[:4])
         risks = "<br>".join(E(x) for x in d.get("risks", [])[:3])
-        stage = pill("مبكرة", "t-amber") if d.get("stage") == "EARLY" else pill("فاتت/اخترق", "t-grey")
+        stage = (pill("مبكرة", "t-amber") if d.get("stage") == "EARLY" else
+                 pill("قبل الافتتاح", "t-blue") if d.get("phase") == "PRE" else
+                 pill("بعد الإغلاق", "t-blue") if d.get("phase") == "POST" else pill("فاتت/اخترق", "t-grey"))
         crow.append([f"<b class='mono'>{E(c['symbol'])}</b><div class='muted'>{E((d.get('name') or '')[:28])}</div>",
                      f"<b class='mono' style='color:{GREEN if ok else GREY}'>{c['score']}</b>" + (" ✔" if ok else ""),
                      stage, f"<span class='mono'>{I.fmt_price(d.get('price'))}</span>",
-                     f"{d['rvol']:.1f}×" if d.get("rvol") else "—",
+                     (f"{d['rvol']:.1f}×" if d.get("rvol") else
+                      f"{d['change_pct']:+.0f}%" if d.get("change_pct") is not None else "—"),
                      f"<span class='mono'>{I.fmt_price(d.get('trigger'))} / {I.fmt_price(d.get('invalidation'))}</span>",
                      why or "—", (f"<span class='bad'>{bad}</span>" if bad else "") + (f"<div class='warn'>{risks}</div>" if risks else ""),
                      f"{RL.quality_label(d.get('data_quality', 0))} ({d.get('data_quality', 0)})"])
-    cand_html = table(["السهم", "الدرجة", "المرحلة", "السعر", "RVOL", "الدخول / الإبطال", "سبب الإشارة", "ما يمنع / المخاطر", "جودة البيانات"], crow)
+    cand_html = table(["السهم", "الدرجة", "المرحلة", "السعر", "RVOL / التحرك", "الدخول / الإبطال", "سبب الإشارة", "ما يمنع / المخاطر", "جودة البيانات"], crow)
 
     arow = []
-    for a in alerts:
+    for a in early_alerts:
         lab, c_ = STATE_AR.get(a["state"], (a["state"], GREY))
         arow.append([E(a["day"]), t_et(a["alert_utc"]), f"<b class='mono'>{E(a['symbol'])}</b>", str(a["score"]), I.fmt_price(a["price"]),
                      I.fmt_price(a["trigger"]), I.fmt_price(a["invalidation"]), f"<b style='color:{c_}'>{lab}</b>",
                      "—" if a["lead_min"] is None else f"{a['lead_min']:.0f} د",
                      "—" if a["gain_from_open"] is None else f"{a['gain_from_open']:+.1f}%",
                      f"{a['data_quality']}", "✓" if a["sent"] else "✗"])
-    alert_html = table(["اليوم", "الوقت (نيويورك)", "السهم", "الدرجة", "السعر", "شرط الدخول", "الإبطال", "الحالة",
+    alert_html = table(["اليوم", "الوقت (الرياض)", "السهم", "الدرجة", "السعر", "شرط الدخول", "الإبطال", "الحالة",
                         "السبق قبل الاختراق", "التغير عند التنبيه", "جودة البيانات", "أُرسل"], arow)
 
     summ = ("<div class='grid3'>" + sum_card("A: الدخول عند التنبيه", sA, GREEN) + sum_card("B: الدخول عند الاختراق", sB, BLUE)
@@ -373,7 +393,7 @@ def build(store, out_path: str, cfg: dict) -> None:
                      E(TSTAT.get(t["status"], t["status"])), I.fmt_price(t["exit"]), t_et(t["exit_utc"]),
                      f"<b class='mono' style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>", "—" if t["r_mult"] is None else f"{t['r_mult']:+.2f}R",
                      f"<span class='muted'>{E(t['note'])}</span>"])
-    trade_html = summ + table(["اليوم", "النوع", "السهم", "الدخول (نيويورك)", "سعر الدخول", "الوقف", "الهدف", "الكمية", "الحالة",
+    trade_html = summ + table(["اليوم", "النوع", "السهم", "الدخول (الرياض)", "سعر الدخول", "الوقف", "الهدف", "الكمية", "الحالة",
                                "الخروج", "وقت الخروج", "الربح", "R", "ملاحظة"], trow)
 
     mrow = [[E(m["day"]), f"<b class='mono'>{E(m['symbol'])}</b>", I.fmt_price(m["prev_close"]), f"+{m['max_gain_pct']:.0f}%",
@@ -385,12 +405,11 @@ def build(store, out_path: str, cfg: dict) -> None:
              str(r["swept"] or 0), str(r["shortlist"] or 0), str(r["qualified"] or 0), str(r["alerts"] or 0),
              str(r["api_calls"] or 0), "—" if r["duration_sec"] is None else f"{r['duration_sec']:.0f} ث",
              f"<span class='bad'>{E((r['errors'] or '')[:200])}</span>"] for r in runs]
-    runs_html = table(["#", "النوع", "البدء (نيويورك)", "تأخر عن الموعد", "أسهم ممسوحة", "قائمة قصيرة", "مؤهلة", "تنبيهات",
+    runs_html = table(["#", "النوع", "البدء (الرياض)", "تأخر عن الموعد", "أسهم ممسوحة", "قائمة قصيرة", "مؤهلة", "تنبيهات",
                        "طلبات Alpaca", "المدة", "أخطاء"], rrow)
 
     upd = runs[0]["started_utc"] if runs else None
-    upd_txt = "—" if not upd else (datetime.fromisoformat(upd).astimezone(I.RIYADH).strftime("%Y-%m-%d %H:%M") + " الرياض • "
-                                   + datetime.fromisoformat(upd).astimezone(I.ET).strftime("%H:%M") + " نيويورك")
+    upd_txt = "—" if not upd else (datetime.fromisoformat(upd).astimezone(I.RIYADH).strftime("%Y-%m-%d %H:%M") + " بتوقيت الرياض")
 
     def tile(label, value, sub="", color="var(--txt)"):
         return f"<div class='tile'><span>{label}</span><b class='mono' style='color:{color}'>{value}</b><small>{sub}</small></div>"
@@ -413,7 +432,7 @@ def build(store, out_path: str, cfg: dict) -> None:
             + f"""<header class="top">
 <div class="brand"><div class="logo">{icon('bell')}</div><div>
 <h1>التنبيه <span>المبكر</span></h1>
-<div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت 5$ • Alpaca • SEC EDGAR</div>
+<div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 5 دقائق في الجلسة • قبلها وبعدها كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت 5$ • Alpaca • SEC EDGAR</div>
 <div class="thm" id="thm" role="group" aria-label="المظهر"><button data-t="light"><i style="background:#f5f6f8"></i>فاتح</button><button data-t="dark"><i style="background:#171a21"></i>داكن</button><button data-t="night"><i style="background:#0a1410"></i>ليلي</button><button data-t="blue"><i style="background:#101d40"></i>أزرق</button></div>
 </div></div>
 <div class="bal"><div class="bv mono" style="color:{col(totA) if totA else 'var(--txt)'}">{E(money(totA) if closedA else '0.00$')}</div>
@@ -432,20 +451,21 @@ def build(store, out_path: str, cfg: dict) -> None:
 {equity_html(trades)}</div>
 {tiles}
 <div class="card"><div class="ch"><span class="lab">مدار الوكلاء — كلهم متصلون بالمحرك</span>
-<span class="muted">أرقام آخر فحص {E(t_et(ls.get('started_utc')) if ls else '—')} نيويورك</span></div>
+<span class="muted">أرقام آخر فحص {E(t_et(ls.get('started_utc')) if ls else '—')} الرياض</span></div>
 {orbit_html(agents, str(ls.get('qualified') or 0), f"مؤهل • حد {cfg['min_score']}", core_note)}</div>
 <div class="two">
 <div class="card"><div class="ch"><span class="lab">الصفقة المميزة</span><span class="muted">مستويات حقيقية من قاعدة البيانات</span></div>
 {focus_html(alerts, trades, cands)}</div>
-<div class="card"><div class="ch"><span class="lab">سجل الجلسة — مباشر</span><span class="muted">بتوقيت نيويورك</span></div>
+<div class="card"><div class="ch"><span class="lab">سجل الجلسة — مباشر</span><span class="muted">بتوقيت الرياض</span></div>
 {log_html(alerts, trades, cands, last_scan, missed)}</div>
 </div>
 <div class="note">البيانات من Alpaca المجانية: السوق الكامل متأخر 15 دقيقة، والسعر اللحظي من IEX فقط (جزء صغير من التداول).
 Float غير متوفر مجاناً. التنبيهات ليست توصية شراء، والصفقات افتراضية فقط. النظام لا يكتشف كل انفجار — راجع قسم «فاتت».</div>
-<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
-<section id="cands"><h2>المرشحون في آخر فحص ({E(t_et(last_scan['started_utc']) if last_scan else '—')} نيويورك)</h2>
+<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+<section id="cands"><h2>المرشحون في آخر فحص — {E(PHASE_LABEL.get(last_phase, ''))} ({E(t_et(last_scan['started_utc']) if last_scan else '—')} الرياض)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
-<section id="alerts"><h2>سجل التنبيهات</h2>{alert_html}</section>
+<section id="alerts"><h2>سجل التنبيهات المبكرة (داخل الجلسة)</h2>{alert_html}</section>
+<section id="ext"><h2>قوائم ما قبل الافتتاح وبعد الإغلاق</h2><div class="muted">أسهم تحت 5$ تحركت 8%+ خارج الجلسة بحجم حقيقي. التفعيل = اختراق قمة تلك الفترة خلال الجلسة التالية، والنتيجة تُقاس من الجلسة فقط.</div>{ext_html}</section>
 <section id="trades"><h2>الصفقات الافتراضية ({cfg['shares_per_trade']} سهم لكل صفقة)</h2>{trade_html}</section>
 <section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت 5$ ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
@@ -587,8 +607,10 @@ footer{margin-top:28px;text-align:center}
 
 SCRIPT = """<script>
 (function(){
-  // مواعيد الفحص: الدقائق 02 و17 و32 و47 من كل ساعة، من 9:32 إلى 15:47 بتوقيت نيويورك، الاثنين–الجمعة.
-  var SLOTS=[2,17,32,47], FIRST=9*60+32, LAST=15*60+47;
+  // مواعيد الفحص (بتوقيت نيويورك، الاثنين–الجمعة): قبل الافتتاح 7:02–9:17 كل 15 دقيقة،
+  // الجلسة 9:32–15:57 كل 5 دقائق، بعد الإغلاق 16:02–19:47 كل 15 دقيقة. العرض بتوقيت الرياض.
+  function slotOk(m,min){ if(m>=7*60+2&&m<9*60+30) return min%15===2;
+    if(m>=9*60+30&&m<16*60) return min%5===2; if(m>=16*60&&m<20*60) return min%15===2; return false; }
   var bar=document.querySelector('.bar'), updated=bar.getAttribute('data-updated');
   var nyF=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,weekday:'short',hour:'2-digit',minute:'2-digit'});
   var ryF=new Intl.DateTimeFormat('ar-SA-u-nu-latn',{timeZone:'Asia/Riyadh',weekday:'long',hour:'numeric',minute:'2-digit'});
@@ -597,7 +619,7 @@ SCRIPT = """<script>
     var t=new Date(now.getTime()); t.setSeconds(0,0); t=new Date(t.getTime()+60000);
     for(var i=0;i<6*24*60;i++){
       var p=ny(t);
-      if(p.wd!=='Sat'&&p.wd!=='Sun'&&p.m>=FIRST&&p.m<=LAST&&SLOTS.indexOf(p.min)>=0) return t;
+      if(p.wd!=='Sat'&&p.wd!=='Sun'&&slotOk(p.m,p.min)) return t;
       t=new Date(t.getTime()+60000);
     }
     return null;
@@ -608,13 +630,14 @@ SCRIPT = """<script>
   var live=document.getElementById('live'),dot=document.getElementById('dot');
   function tick(){
     var now=new Date(), n=nextScan(now), open=ny(now);
-    var inSession=open.wd!=='Sat'&&open.wd!=='Sun'&&open.m>=9*60+30&&open.m<16*60;
-    live.textContent=inSession?'يعمل الآن — الجلسة مفتوحة':'السوق مغلق';
-    dot.className='dot'+(inSession?' on':'');
+    var wk=open.wd!=='Sat'&&open.wd!=='Sun', m=open.m;
+    var ph=!wk?'':m>=7*60&&m<9*60+30?'pre':m>=9*60+30&&m<16*60?'reg':m>=16*60&&m<20*60?'post':'';
+    live.textContent=ph==='reg'?'يعمل الآن — الجلسة مفتوحة':ph==='pre'?'يعمل الآن — ما قبل الافتتاح':ph==='post'?'يعمل الآن — بعد الإغلاق':'السوق مغلق';
+    dot.className='dot'+(ph?' on':'');
     if(n){
-      nlbl.textContent=inSession?'الفحص التالي بعد':'أول فحص بعد';
+      nlbl.textContent=ph?'الفحص التالي بعد':'أول فحص بعد';
       cd.textContent=fmt((n-now)/1000);
-      nat.textContent='('+ryF.format(n)+' بتوقيت الرياض)';
+      nat.textContent='('+ryF.format(n)+' بتوقيت الرياض — الموقع يتحدث كل 10 دقائق تقريباً، وفوراً عند أي تنبيه)';
     }
     if(updated){var a=(now-new Date(updated))/60000;
       age.textContent='آخر تحديث قبل '+(a<1?'أقل من دقيقة':a<60?Math.floor(a)+' دقيقة':a<1440?Math.floor(a/60)+' ساعة':Math.floor(a/1440)+' يوم');}

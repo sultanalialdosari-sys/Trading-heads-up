@@ -23,7 +23,7 @@ UTC = timezone.utc
 CFG = load_cfg(os.path.join(os.path.dirname(HERE), "config.json"))
 
 
-def run_at(w, st, hm, kind="scan", sec_ua="Test t@example.com"):
+def run_at(w, st, hm, kind="scan", sec_ua="Test t@example.com"):  # noqa
     w.now = et(TODAY, *hm)
     w.tg.clear()
     c = I.AlpacaClient("KEY_SHOULD_NOT_LEAK", "SECRET_SHOULD_NOT_LEAK", I.Config(), session=w)
@@ -212,3 +212,67 @@ def test_session_start_no_alert_and_schedule():
     now = datetime(2026, 11, 20, 15, 40, tzinfo=UTC)
     assert R.scheduled_time(now, [2, 17, 32, 47]) == datetime(2026, 11, 20, 15, 32, tzinfo=UTC)
     assert R.scheduled_time(datetime(2026, 11, 20, 15, 1, tzinfo=UTC), [2, 17, 32, 47]) == datetime(2026, 11, 20, 14, 47, tzinfo=UTC)
+
+
+# ---------------------------------------------------------------- ما قبل الافتتاح / بعد الإغلاق
+def test_premarket_watchlist_alert_and_session_outcome():
+    st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
+    w = FakeWorld()
+    info, tg = run_at(w, st, (9, 2), kind="pre")
+    pre = st.q("SELECT * FROM alerts WHERE kind='PRE'")
+    assert [a["symbol"] for a in pre] == ["PREM"], (info, pre)
+    a = pre[0]
+    assert a["eval_from"].startswith("2026-11-20T14:30") and a["trigger"] > 2.6 and a["invalidation"] < a["trigger"]
+    assert tg and tg[0].startswith("🌅 قائمة مراقبة قبل الافتتاح — PREM") and "الرياض" in tg[0] and "نيويورك" not in tg[0]
+    # تكرار الفحص قبل الافتتاح لا يكرر التنبيه
+    run_at(w, st, (9, 17), kind="pre")
+    assert len(st.q("SELECT * FROM alerts WHERE kind='PRE'")) == 1
+    # الجلسة: يخترق قمة ما قبل الافتتاح — تُحسب من 9:30 فقط
+    run_at(w, st, (11, 2))
+    a = st.one("SELECT * FROM alerts WHERE kind='PRE'")
+    t = st.one("SELECT * FROM trades WHERE kind='PRE'")
+    assert a["state"] == "ACTIVATED" and a["activated_utc"] >= et(TODAY, 9, 30).isoformat()
+    assert t["status"] in ("OPEN", "TARGET") and t["entry_utc"] >= et(TODAY, 9, 30).isoformat()
+
+
+def test_afterhours_watchlist_targets_next_session():
+    st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
+    w = FakeWorld()
+    info, tg = run_at(w, st, (17, 2), kind="post")
+    post = st.q("SELECT * FROM alerts WHERE kind='POST'")
+    assert [a["symbol"] for a in post] == ["AFTR"], info
+    assert post[0]["day"] == "2026-11-23" and post[0]["eval_from"].startswith("2026-11-23T14:30")
+    tr = st.one("SELECT * FROM trades WHERE kind='POST'")
+    assert tr["status"] == "PENDING" and tr["day"] == "2026-11-23"
+    assert tg[0].startswith("🌙 قائمة مراقبة بعد الإغلاق — AFTR")
+
+
+def test_follow_skips_recent_sip_requests():
+    """التنبيه الجديد في نفس الفحص لا يطلب بيانات السوق الكامل الحديثة (كانت تسبب خطأ)."""
+    st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
+    w = FakeWorld()
+    info, _ = run_at(w, st, (12, 17))
+    assert "follow" not in (info.get("errors") or "")
+
+
+def test_loop_schedule_helpers():
+    import loop as L
+    from zoneinfo import ZoneInfo
+    ny = ZoneInfo("America/New_York")
+    t = datetime(2026, 11, 23, 10, 3, tzinfo=ny)
+    assert L.phase_of(t, (9, 30), (16, 0)) == "REG" and L.next_slot(t, "REG").minute == 7
+    t = datetime(2026, 11, 23, 8, 3, tzinfo=ny)
+    assert L.phase_of(t, (9, 30), (16, 0)) == "PRE" and L.next_slot(t, "X").minute == 17
+    assert L.phase_of(datetime(2026, 11, 27, 14, 0, tzinfo=ny), (9, 30), (13, 0)) == "POST"   # إغلاق مبكر
+    assert L.phase_of(datetime(2026, 11, 23, 20, 5, tzinfo=ny), (9, 30), (16, 0)) == "DONE"
+
+
+def test_site_shows_riyadh_time_and_ext_section(day):
+    st, w, log, tmp = day
+    out = os.path.join(tmp, "docs2", "index.html")
+    site.build(st, out, CFG)
+    html = open(out, encoding="utf-8").read()
+    assert "قوائم ما قبل الافتتاح وبعد الإغلاق" in html and "(الرياض)" in html
+    import re
+    visible = re.sub(r"<script.*?</script>", "", html, flags=re.S)
+    assert "نيويورك" not in visible

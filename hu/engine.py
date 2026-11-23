@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 import intraday as I
+from hu import extended as X
 from hu import news as N
 from hu import rules as RL
 from hu import trades as TR
@@ -26,6 +27,7 @@ ET, UTC = I.ET, I.UTC
 
 def load_cfg(path: str) -> dict:
     cfg = dict(RL.DEFAULTS)
+    cfg.update(X.EXT_DEFAULTS)
     if os.path.exists(path):
         cfg.update(json.load(open(path, encoding="utf-8")))
     return cfg
@@ -41,9 +43,10 @@ def fmt_vol(v: Optional[float]) -> str:
 
 
 def et_str(iso: Optional[str]) -> str:
+    """الوقت بتوقيت الرياض (الاسم القديم أُبقي حتى لا تنكسر الاستدعاءات)."""
     if not iso:
         return "غير متوفر"
-    return datetime.fromisoformat(iso).astimezone(ET).strftime("%H:%M")
+    return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
 
 
 # ====================================================================== المرحلة 1
@@ -84,6 +87,7 @@ def sweep(client: I.AlpacaClient, cfg: dict, now: datetime) -> Tuple[pd.DataFram
                      "trade_t": lt.get("t")})
     df = pd.DataFrame(rows)
     df.attrs["universe"] = len(uni)
+    df.attrs["snaps"], df.attrs["names"] = snaps, names
     return df, feed_note
 
 
@@ -109,7 +113,7 @@ def baseline_pick(df: pd.DataFrame, cfg: dict, taken: set, n: int = 10) -> pd.Da
 # ====================================================================== التنبيه
 def alert_text(st: RL.Setup, data_note: str) -> str:
     L = [f"🔔 إشارة مبكرة — {st.symbol}" + (f" ({st.name[:40]})" if st.name else ""),
-         f"💵 السعر {I.fmt_price(st.price)} — آخر صفقة على IEX {et_str(st.price_time)} نيويورك"
+         f"💵 السعر {I.fmt_price(st.price)} — آخر صفقة على IEX {et_str(st.price_time)} الرياض"
          + (f" (قبل {st.price_age_sec:.0f} ث)" if st.price_age_sec is not None else ""),
          f"⏱️ {data_note}",
          f"📊 الحجم اليوم حتى الآن {fmt_vol(st.day_volume)}"
@@ -166,7 +170,7 @@ class Engine:
         if clock_err:
             self.errors.append("clock: " + clock_err)
         snap_df = pd.DataFrame()
-        if info["market_open"] or kind == "final":
+        if info["market_open"] or kind in ("final", "pre", "post"):
             try:
                 snap_df, info["feed_note"] = sweep(self.c, self.cfg, now)
                 info["swept"] = len(snap_df)
@@ -175,6 +179,11 @@ class Engine:
                 self.errors.append("sweep: " + e.message)
         if info["market_open"] and kind == "scan" and not snap_df.empty:
             self.scan(now, day, snap_df, info)
+        if kind in ("pre", "post") and not snap_df.empty:
+            try:
+                self.ext_scan(now, kind.upper(), snap_df, info, clock)
+            except I.ApiError as e:
+                self.errors.append(f"{kind}: " + e.message)
         # متابعة كل الصفقات والتنبيهات المفتوحة لهذا اليوم
         try:
             self.follow(now, day, final=(kind == "final"))
@@ -184,6 +193,11 @@ class Engine:
             if not snap_df.empty:
                 self.missed(day, snap_df)
             self.daily_summary(day)
+            # تنظيف: المرشحون غير المؤهلين لأكثر من 3 أيام لا حاجة لهم (التنبيهات والصفقات تبقى)
+            old = (now.astimezone(ET) - timedelta(days=3)).strftime("%Y-%m-%d")
+            self.db.db.execute("DELETE FROM candidates WHERE day < ? AND qualifies = 0", (old,))
+            self.db.db.execute("DELETE FROM runs WHERE started_utc < ? AND alerts = 0 AND (errors IS NULL OR errors = '')",
+                               ((now - timedelta(days=14)).isoformat(),))
         info["api_calls"] = I.API_STATS["total"] - calls0
         info["sec_calls"] = self.sec.calls
         info["duration_sec"] = round(time.time() - t0, 1)
@@ -242,7 +256,10 @@ class Engine:
             ratio = cache.vol_ratio.get(st.symbol)
             RL.finalize(st, (1 / ratio) if ratio else None, cache.sip_ok)
         run_id = self.run_id
-        for st in setups:
+        # نحفظ أفضل 25 فقط (والمؤهلين) حتى لا تكبر القاعدة مع الفحص كل 5 دقائق
+        keep = sorted(setups, key=lambda x: -x.score)[:25]
+        keep += [x for x in setups if x.qualifies and x not in keep]
+        for st in keep:
             self.db.insert("candidates", {"run_id": run_id, "day": day, "symbol": st.symbol, "score": st.score,
                                           "stage": st.stage, "qualifies": int(st.qualifies and st.score >= self.cfg["min_score"]),
                                           "data": st.to_dict()})
@@ -273,7 +290,7 @@ class Engine:
         return round(v[len(v) // 2], 2) if v else 5.0
 
     def maybe_alert(self, st: RL.Setup, now: datetime, day: str, run_id: int, meta: pd.DataFrame) -> bool:
-        prev = self.db.one("SELECT * FROM alerts WHERE day=? AND symbol=? ORDER BY id DESC LIMIT 1", (day, st.symbol))
+        prev = self.db.one("SELECT * FROM alerts WHERE day=? AND symbol=? AND kind='EARLY' ORDER BY id DESC LIMIT 1", (day, st.symbol))
         if prev:
             if prev["state"] != "OPEN":
                 return False   # تفعّلت أو أُبطلت اليوم: لا تنبيه مبكر جديد لنفس السهم
@@ -317,13 +334,19 @@ class Engine:
 
     # ---------------------------------------------------------------- follow-up
     def follow(self, now: datetime, day: str, final: bool) -> None:
-        trades = self.db.q("SELECT * FROM trades WHERE day=? AND status IN ('OPEN','PENDING')", (day,))
-        alerts = self.db.q("SELECT * FROM alerts WHERE day=? AND state='OPEN'", (day,))
+        cut = now - timedelta(minutes=16)            # السوق الكامل المسموح مجاناً (أقدم من 15 دقيقة)
+
+        def t0(x):
+            return datetime.fromisoformat(x)
+        trades = [t for t in self.db.q("SELECT * FROM trades WHERE day=? AND status IN ('OPEN','PENDING')", (day,))
+                  if t0(t["created_utc"]) < cut]
+        alerts = [a for a in self.db.q("SELECT * FROM alerts WHERE day=? AND state='OPEN'", (day,))
+                  if max(t0(a["alert_utc"]), t0(a["eval_from"]) if a.get("eval_from") else t0(a["alert_utc"])) < cut]
         syms = sorted({t["symbol"] for t in trades} | {a["symbol"] for a in alerts})
         if not syms:
-            return
-        cut = now - timedelta(minutes=16)            # السوق الكامل المسموح مجاناً (أقدم من 15 دقيقة)
-        start = min(datetime.fromisoformat(x) for x in [t["created_utc"] for t in trades] + [a["alert_utc"] for a in alerts])
+            return                                    # لا شيء أقدم من 16 دقيقة — لا نطلب بيانات حديثة غير مسموحة
+        start = min([t0(t["created_utc"]) for t in trades] +
+                    [max(t0(a["alert_utc"]), t0(a["eval_from"]) if a.get("eval_from") else t0(a["alert_utc"])) for a in alerts])
         bars: Dict[str, pd.DataFrame] = {}
         for i in range(0, len(syms), 50):
             bars.update(self.c.bars(syms[i:i + 50], "1Min", start - timedelta(minutes=1), cut, feed="sip"))
@@ -338,16 +361,72 @@ class Engine:
             if ev["state"] == "ACTIVATED":
                 self.db.update("alerts", a["id"], state="ACTIVATED", activated_utc=ev["at"], lead_min=ev["lead_min"])
                 if self.db.once(f"act:{a['id']}", day, now.isoformat()):
-                    self.send(f"✅ تفعّلت — {a['symbol']}: اخترق {I.fmt_price(a['trigger'])} الساعة {et_str(ev['at'])} نيويورك "
+                    self.send(f"✅ تفعّلت — {a['symbol']}: اخترق {I.fmt_price(a['trigger'])} الساعة {et_str(ev['at'])} الرياض "
                               f"(بعد {ev['lead_min']:.0f} دقيقة من التنبيه).\nالإبطال ما زال {I.fmt_price(a['invalidation'])}. "
                               f"البيانات من السوق الكامل متأخرة 15 دقيقة. ليست توصية.")
             elif ev["state"] == "INVALIDATED":
                 self.db.update("alerts", a["id"], state="INVALIDATED", invalidated_utc=ev["at"])
                 if self.db.once(f"inv:{a['id']}", day, now.isoformat()):
                     self.send(f"❌ أُلغيت — {a['symbol']}: كسر مستوى الإبطال {I.fmt_price(a['invalidation'])} "
-                              f"الساعة {et_str(ev['at'])} نيويورك قبل أن يخترق.")
+                              f"الساعة {et_str(ev['at'])} الرياض قبل أن يخترق.")
             elif ev["state"] == "EXPIRED":
                 self.db.update("alerts", a["id"], state="EXPIRED")
+
+    # ---------------------------------------------------------------- ما قبل الافتتاح / بعد الإغلاق
+    def ext_scan(self, now: datetime, phase: str, snap_df: pd.DataFrame, info: dict, clock: dict) -> None:
+        snaps, names = snap_df.attrs.get("snaps") or {}, snap_df.attrs.get("names") or {}
+        rows = X.ext_rows(snaps, names, phase, now, self.cfg)
+        info["shortlist"] = len(rows)
+        if rows.empty:
+            return
+        # الجلسة التي تُقاس فيها النتيجة: افتتاح اليوم (قبل الافتتاح) أو افتتاح يوم التداول التالي (بعد الإغلاق)
+        eval_from = I.parse_ts(clock["next_open"]) if clock.get("next_open") else None
+        eval_day = eval_from.astimezone(ET).strftime("%Y-%m-%d") if eval_from else now.astimezone(ET).strftime("%Y-%m-%d")
+        bars = X.ext_bars(self.c, list(rows.symbol), phase, now)
+        setups = [X.evaluate_ext(r, bars.get(r["symbol"]), phase, self.cfg) for r in rows.to_dict("records")]
+        pre = [st for st in setups if not st.gates_failed]
+        raw_news = self.c.news([st.symbol for st in pre], 18) if pre else []
+        for st in pre:
+            si = self.sec.info(st.symbol, now)
+            if si.ok:
+                st.name = si.name or st.name
+                st.shares_out, st.shares_out_date = si.shares_out, si.shares_out_date
+                st.excluded.extend(si.exclude)
+                st.risks.extend(m for _, m in si.penalties)
+                if si.penalty:
+                    st.parts["خصم"] = st.parts.get("خصم", 0) - si.penalty
+            else:
+                st.missing.append("إفصاحات SEC")
+            X.apply_news(st, N.summarize(I.news_for_symbol(raw_news, st.symbol), si.recent_8k_days))
+            X.finalize(st, si.ok)
+        for st in setups:
+            if st.gates_failed:
+                X.finalize(st, False)
+            st.data_note = "السوق الكامل متأخر 15 دقيقة + IEX"
+            self.db.insert("candidates", {"run_id": self.run_id, "day": eval_day, "symbol": st.symbol, "score": st.score,
+                                          "stage": phase, "phase": phase,
+                                          "qualifies": int(st.qualifies and st.score >= self.cfg["ext_min_score"]),
+                                          "data": st.to_dict()})
+        good = sorted([st for st in setups if st.qualifies and st.score >= self.cfg["ext_min_score"]], key=lambda x: -x.score)
+        info["qualified"] = len(good)
+        for st in good:
+            if self.db.one("SELECT id FROM alerts WHERE day=? AND symbol=? AND kind=?", (eval_day, st.symbol, phase)):
+                continue          # تنبيه واحد لكل سهم لكل فترة
+            if not st.trigger or not st.invalidation or st.invalidation >= st.trigger:
+                continue
+            msg = X.alert_text(st, eval_from)
+            sent = self.send(msg)
+            aid = self.db.insert("alerts", {
+                "day": eval_day, "symbol": st.symbol, "run_id": self.run_id, "alert_utc": now.isoformat(), "kind": phase,
+                "phase": phase, "score": st.score, "price": st.price, "trigger": st.trigger, "invalidation": st.invalidation,
+                "data_quality": st.data_quality, "gain_from_open": st.change_pct, "state": "OPEN", "sent": int(sent),
+                "message": msg, "data": st.to_dict(), "eval_from": eval_from.isoformat() if eval_from else None})
+            info["alerts"] += 1
+            # صفقة افتراضية: أمر معلّق عند قمة الفترة يبدأ من افتتاح الجلسة
+            self.db.insert("trades", {"alert_id": aid, "kind": phase, "day": eval_day, "symbol": st.symbol,
+                                      "created_utc": (eval_from or now).isoformat(), "ref_price": st.price,
+                                      "trigger": st.trigger, "stop": st.invalidation, "shares": int(self.cfg["shares_per_trade"]),
+                                      "status": "PENDING", "note": f"قائمة {X.PHASE_AR[phase]}: يُنفَّذ إذا اخترق القمة في الجلسة"})
 
     # ---------------------------------------------------------------- end of day
     def missed(self, day: str, snap_df: pd.DataFrame) -> None:
@@ -369,7 +448,7 @@ class Engine:
             else:
                 f = self.db.one("SELECT * FROM movers WHERE day=? AND symbol=?", (day, r.symbol))
                 if f and f["first_chg"] > self.cfg["max_day_change_pct"]:
-                    reason = (f"تحرك بين فحصين: أول ظهور الساعة {et_str(f['first_utc'])} نيويورك وقد ارتفع "
+                    reason = (f"تحرك بين فحصين: أول ظهور الساعة {et_str(f['first_utc'])} الرياض وقد ارتفع "
                               f"{f['first_chg']:.0f}% بالفعل — الفحص الدوري كان متأخراً")
                 elif f:
                     reason = (f"ظهر الساعة {et_str(f['first_utc'])} مرتفعاً {f['first_chg']:.0f}% لكنه لم يدخل القائمة القصيرة "
@@ -383,9 +462,11 @@ class Engine:
     def daily_summary(self, day: str) -> None:
         if not self.db.once(f"daily:{day}", day, datetime.now(UTC).isoformat()):
             return
-        al = self.db.q("SELECT * FROM alerts WHERE day=?", (day,))
+        al_all = self.db.q("SELECT * FROM alerts WHERE day=?", (day,))
+        al = [a for a in al_all if a["kind"] == "EARLY"]
+        ext = [a for a in al_all if a["kind"] in ("PRE", "POST")]
         tr = self.db.q("SELECT * FROM trades WHERE day=?", (day,))
-        sA, sB, sBase = (TR.summary([t for t in tr if t["kind"] == k]) for k in ("A", "B", "BASE"))
+        sA, sB, sBase, sPre, sPost = (TR.summary([t for t in tr if t["kind"] == k]) for k in ("A", "B", "BASE", "PRE", "POST"))
         ms = self.db.q("SELECT COUNT(*) AS n FROM missed WHERE day=?", (day,))[0]["n"]
         act = [a for a in al if a["state"] == "ACTIVATED"]
         inv = [a for a in al if a["state"] == "INVALIDATED"]
@@ -398,6 +479,8 @@ class Engine:
         txt = [f"📋 ملخص {day}",
                f"تنبيهات مبكرة: {len(al)} • تفعّلت {len(act)} • أُلغيت {len(inv)} • بلا حسم {len(al) - len(act) - len(inv)}",
                line("A دخول عند التنبيه", sA), line("B دخول عند الاختراق", sB), line("المقارنة (أي قفزة حجم)", sBase),
+               f"قوائم ما قبل الافتتاح/بعد الإغلاق لهذه الجلسة: {len(ext)} • تفعّلت {sum(1 for a in ext if a['state'] == 'ACTIVATED')}",
+               line("قائمة ما قبل الافتتاح (عند اختراق القمة)", sPre), line("قائمة بعد إغلاق أمس (عند اختراق القمة)", sPost),
                f"فاتت (ارتفعت 30%+ بلا تنبيه): {ms}",
                "صفقات افتراضية فقط — لا أوامر حقيقية."]
         if act:

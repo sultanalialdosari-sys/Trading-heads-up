@@ -28,11 +28,11 @@ def et(day, hh, mm):
     return (datetime.fromisoformat(day).replace(hour=hh, minute=mm) - ET_OFF).replace(tzinfo=UTC)
 
 
-def _session(day, path_fn, vol_fn, rng, wick):
+def _session(day, path_fn, vol_fn, rng, wick, start=(9, 30), n=390):
     rows = []
-    t0 = et(day, 9, 30)
+    t0 = et(day, *start)
     prev = None
-    for k in range(390):
+    for k in range(n):
         t = t0 + timedelta(minutes=k)
         p = path_fn(k)
         o = prev if prev is not None else p
@@ -81,6 +81,15 @@ def build():
     data["RUNR"] = runr_prev + _session(TODAY, lambda k: 1.0 + 0.40 * min(1, k / 150), lambda k: 5000, rng, 0.002)
     data["JUMP"] = normal_days(3.0, 500) + _session(TODAY, lambda k: 3.0 - 0.25 * k / 390, lambda k: 2500, rng, 0.004)
     data["FLAT"] = normal_days(4.0, 300) + _session(TODAY, lambda k: 4.0 + rng.normal(0, 0.002), lambda k: 300, rng, 0.003)
+    # PREM: يقفز قبل الافتتاح (7:00–9:29) بحجم كبير ثم يخترق قمة ما قبل الافتتاح الساعة 9:40
+    pm = _session(TODAY, lambda k: 2.0 + 0.60 * min(1, k / 60) - (0.06 * (1 + math.sin(k / 4)) / 2 if k > 60 else 0),
+                  lambda k: 3000, rng, 0.004, start=(7, 0), n=150)
+    reg = _session(TODAY, lambda k: 2.58 + (0 if k < 10 else min(0.62, (k - 10) * 0.02)) - (0 if k < 70 else (k - 70) * 0.002),
+                   lambda k: 6000, rng, 0.004)
+    data["PREM"] = normal_days(2.0, 800) + pm + reg
+    # AFTR: هادئ في الجلسة ثم يتحرك +20% بعد الإغلاق (16:00–17:30)
+    ah = _session(TODAY, lambda k: 3.0 + 0.6 * min(1, k / 40), lambda k: 2500, rng, 0.004, start=(16, 0), n=90)
+    data["AFTR"] = normal_days(3.0, 700) + _session(TODAY, lambda k: 3.0 + rng.normal(0, 0.003), lambda k: 700, rng, 0.003) + ah
     out = {}
     for s, rows in data.items():
         df = pd.DataFrame(rows, columns=["t", "open", "high", "low", "close", "volume"]).set_index("t")
@@ -110,7 +119,7 @@ class FakeWorld:
         self.headers = {}
         self.calls = []
         self.tg = []
-        self.cik = {"EARL": 1001, "DILU": 1002, "RUNR": 1003, "JUMP": 1004, "FLAT": 1005}
+        self.cik = {"EARL": 1001, "DILU": 1002, "RUNR": 1003, "JUMP": 1004, "FLAT": 1005, "PREM": 1006, "AFTR": 1007}
 
     # ---- Alpaca
     def _frame(self, sym, feed, tf, start, end):
@@ -141,7 +150,12 @@ class FakeWorld:
             return self.sec(url)
         if url.endswith("/v2/clock"):
             open_ = et(TODAY, 9, 30) <= self.now < et(TODAY, 16, 0)
-            return Resp(200, {"timestamp": self.now.isoformat().replace("+00:00", "Z"), "is_open": open_})
+            nxt = et(TODAY, 9, 30) if self.now < et(TODAY, 9, 30) else et("2026-11-23", 9, 30)
+            return Resp(200, {"timestamp": self.now.isoformat().replace("+00:00", "Z"), "is_open": open_,
+                              "next_open": nxt.isoformat().replace("+00:00", "Z")})
+        if url.endswith("/v2/calendar"):
+            d = params.get("start")
+            return Resp(200, [{"date": d, "open": "09:30", "close": "16:00"}] if d in DAYS + ["2026-11-23"] else [])
         if url.endswith("/v2/assets"):
             return Resp(200, [{"symbol": s, "name": f"{s} Corp", "exchange": "NASDAQ", "tradable": True} for s in self.m1] +
                         [{"symbol": "OTCX", "name": "otc", "exchange": "OTC", "tradable": True}])
@@ -156,14 +170,19 @@ class FakeWorld:
                 if df is None:
                     continue
                 av = df[df.index < ref]
-                tdy = av[av.index >= et(TODAY, 9, 30)]
+                tdy = av[(av.index >= et(TODAY, 9, 30)) & (av.index < et(TODAY, 16, 0))]
                 prv = df[(df.index >= et(DAYS[-2], 9, 30)) & (df.index < et(DAYS[-2], 16, 0))]
+                dbt = et(TODAY, 5, 0)
+                if tdy.empty:      # قبل الافتتاح: آخر شمعة يومية = جلسة أمس
+                    tdy, dbt = prv, et(DAYS[-2], 5, 0)
+                    prv = df[(df.index >= et(DAYS[-3], 9, 30)) & (df.index < et(DAYS[-3], 16, 0))]
                 vmul = 0.05 if feed != "delayed_sip" else 1
                 last = av.iloc[-1]
                 p = float(last.close)
                 out[s] = {"latestTrade": {"t": (ref - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"), "p": p},
                           "latestQuote": {"t": (ref - timedelta(seconds=20)).strftime("%Y-%m-%dT%H:%M:%SZ"), "bp": round(p - 0.003, 4), "ap": round(p + 0.003, 4)},
-                          "dailyBar": {"o": float(tdy.open.iloc[0]), "h": float(tdy.high.max()), "l": float(tdy.low.min()), "c": p,
+                          "dailyBar": {"t": dbt.strftime("%Y-%m-%dT%H:%M:%SZ"), "o": float(tdy.open.iloc[0]), "h": float(tdy.high.max()),
+                                       "l": float(tdy.low.min()), "c": float(tdy.close.iloc[-1]) if dbt.date() != et(TODAY, 5, 0).date() or ref >= et(TODAY, 16, 0) else p,
                                        "v": float(tdy.volume.sum() * vmul), "vw": float((tdy.close * tdy.volume).sum() / tdy.volume.sum())},
                           "prevDailyBar": {"c": float(prv.close.iloc[-1]), "v": float(prv.volume.sum() * vmul)}}
             return Resp(200, out)

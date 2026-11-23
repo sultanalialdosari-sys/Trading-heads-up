@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 data/sec_tickers.json
 .env
+# البيانات تُحفظ في فرع data، والموقع يُبنى وقت النشر
+data/headsup.db
+data/report.md
+docs/index.html
+docs/status.json

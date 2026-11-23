@@ -1,23 +1,28 @@
 name: headsup
 
+# مشغّل مستمر: كل تشغيل يبقى يعمل حتى 5 ساعات و40 دقيقة ويفحص في المواعيد بنفسه
+# (قبل الافتتاح كل 15 دقيقة • الجلسة كل 5 دقائق • بعد الإغلاق كل 15 دقيقة • إغلاق اليوم بعد الإغلاق بـ20 دقيقة).
+# السبب: GitHub يُسقط كثيراً من التشغيلات المجدولة المتقاربة. هنا عدة مواعيد بداية تتسلّم من بعضها؛
+# إذا كان تشغيل يعمل، ينتظر التالي دوره (concurrency) ثم يكمل من حيث يكون الوقت.
 on:
   schedule:
-    # كل 15 دقيقة (الدقائق 02 و17 و32 و47 — بعيداً عن بداية الساعة المزدحمة على GitHub)، الاثنين–الجمعة.
-    # يغطي الجلسة صيفاً وشتاءً؛ السكربت نفسه يتحقق من ساعة السوق ويتوقف إذا كان مغلقاً.
-    - cron: "2,17,32,47 13-20 * * 1-5"
-    # بعد الإغلاق: إغلاق الصفقات الافتراضية، «فاتت»، ملخص اليوم
-    - cron: "40 21 * * 1-5"
+    - cron: "5 11 * * 1-5"
+    - cron: "5 12 * * 1-5"
+    - cron: "35 16 * * 1-5"
+    - cron: "35 17 * * 1-5"
+    - cron: "5 22 * * 1-5"
+    - cron: "5 23 * * 1-5"
   workflow_dispatch:
     inputs:
-      final:
-        description: "تشغيل ما بعد الإغلاق؟"
-        type: boolean
-        default: false
+      mode:
+        description: "loop = المشغّل المستمر • once = فحص واحد • pre / post / final"
+        type: choice
+        options: [loop, once, pre, post, final]
+        default: loop
 
 permissions:
-  contents: write     # حفظ قاعدة البيانات والموقع في المستودع
-  pages: write        # نشر الموقع على GitHub Pages
-  id-token: write
+  contents: write     # حفظ قاعدة البيانات في فرع data
+  actions: write      # طلب نشر الموقع (site.yml)
 
 concurrency:
   group: headsup
@@ -26,7 +31,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,41 +39,21 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Scan
+      - name: Run
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          GH_TOKEN: ${{ github.token }}
+          PYTHONUNBUFFERED: "1"
         run: |
-          if [ "${{ github.event.schedule }}" = "40 21 * * 1-5" ] || [ "${{ inputs.final }}" = "true" ]; then
-            python run.py --final
-            python report.py "$(date -u -d '6 days ago' +%F)" "$(date -u +%F)" > /dev/null
-          else
-            python run.py
-          fi
-      - name: Save results
-        run: |
-          git config user.name "headsup-bot"
-          git config user.email "headsup-bot@users.noreply.github.com"
-          git add data/headsup.db docs/
-          git diff --cached --quiet || git commit -m "headsup: $(date -u +'%F %H:%M') UTC"
-          git pull --rebase -X ours || true
-          git push
-      - name: Upload site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-  # نشر الموقع على GitHub Pages — للمستودع العام فقط، و Pages مضبوط على Source: GitHub Actions.
-  # لو كان المستودع خاصاً يفشل هذا الجزء وحده، والفحص والتنبيهات تعمل عادي.
-  site:
-    needs: run
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          MODE="${{ inputs.mode }}"
+          case "${MODE:-loop}" in
+            loop)  python loop.py ;;
+            once)  python run.py ;;
+            pre)   python run.py --pre ;;
+            post)  python run.py --post ;;
+            final) python run.py --final ;;
+          esac
