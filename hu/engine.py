@@ -49,6 +49,9 @@ def et_str(iso: Optional[str]) -> str:
     return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
 
 
+SWEEP_EXTRA: dict = {}
+
+
 # ====================================================================== المرحلة 1
 def sweep(client: I.AlpacaClient, cfg: dict, now: datetime) -> Tuple[pd.DataFrame, str]:
     assets = client._get(I.PAPER_BASE, "/v2/assets", {"status": "active", "asset_class": "us_equity"})
@@ -86,8 +89,9 @@ def sweep(client: I.AlpacaClient, cfg: dict, now: datetime) -> Tuple[pd.DataFram
                      "vol_jump": (v / (pv * frac)) if pv > 0 else None,
                      "trade_t": lt.get("t")})
     df = pd.DataFrame(rows)
-    df.attrs["universe"] = len(uni)
-    df.attrs["snaps"], df.attrs["names"] = snaps, names
+    # ملاحظة أداء: لا نضع اللقطات في df.attrs — pandas ينسخ attrs نسخاً عميقاً مع كل عملية على الجدول
+    # (كان ذلك يجعل الفحص يأخذ 4–5 دقائق بدل ثوانٍ).
+    SWEEP_EXTRA.update(universe=len(uni), snaps=snaps, names=names)
     return df, feed_note
 
 
@@ -189,9 +193,9 @@ class Engine:
                 else:
                     snap_df, info["feed_note"] = sweep(self.c, self.cfg, now)
                     if sweep_cache is not None:
-                        sweep_cache.update(df=snap_df, at=now, note=info["feed_note"], kind=kind)
+                        sweep_cache.update(df=snap_df, at=now, note=info["feed_note"], kind=kind, **SWEEP_EXTRA)
                 info["swept"] = len(snap_df)
-                info["universe"] = snap_df.attrs.get("universe", 0)
+                info["universe"] = (sweep_cache or {}).get("universe") or SWEEP_EXTRA.get("universe", 0)
             except I.ApiError as e:
                 self.errors.append("sweep: " + e.message)
         if info["market_open"] and kind == "scan" and not snap_df.empty:
@@ -399,7 +403,7 @@ class Engine:
 
     # ---------------------------------------------------------------- ما قبل الافتتاح / بعد الإغلاق
     def ext_scan(self, now: datetime, phase: str, snap_df: pd.DataFrame, info: dict, clock: dict) -> None:
-        snaps, names = snap_df.attrs.get("snaps") or {}, snap_df.attrs.get("names") or {}
+        snaps, names = SWEEP_EXTRA.get("snaps") or {}, SWEEP_EXTRA.get("names") or {}
         rows = X.ext_rows(snaps, names, phase, now, self.cfg)
         info["shortlist"] = len(rows)
         if rows.empty:
