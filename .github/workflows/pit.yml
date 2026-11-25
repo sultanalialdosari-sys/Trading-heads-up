@@ -1,0 +1,59 @@
+name: pit-data
+
+# بناء مخزن البيانات نقطي الزمن (يومي منذ 2016 + الأسهم المشطوبة + SEC) ونشره كـ Release باسم pit-data.
+# يدوي فقط. يستخدم 100 طلب/دقيقة من Alpaca حتى لا يزاحم المراقبة الحية التي تستخدم نفس المفتاح.
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "الخطوات: assets,daily,sec (أو sec وحدها لتحديث SEC على أصول موجودة)"
+        default: "assets,daily,sec"
+      limit:
+        description: "للتجربة: أول N رمز فقط (0 = الكل)"
+        default: "0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pit-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pyarrow
+      - name: Previous store (for partial rebuilds)
+        if: ${{ !contains(inputs.steps, 'assets') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m pit.release download --dir pit_data
+      - name: Build
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          RESEARCH_RPM: "100"
+          PYTHONUNBUFFERED: "1"
+        run: python -m pit.build --out pit_data --cache pit_cache --steps "${{ inputs.steps }}" --limit "${{ inputs.limit }}"
+      - name: Summary
+        if: always()
+        run: |
+          [ -f pit_data/manifest.json ] && python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          m = json.load(open("pit_data/manifest.json"))
+          files = m.pop("files", {})
+          print("## PIT data\n```json\n" + json.dumps(m, ensure_ascii=False, indent=1, default=str) + "\n```")
+          print(f"\n{len(files)} files, {sum(v['bytes'] for v in files.values())/1e6:.0f} MB")
+          EOF
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m pit.release upload --dir pit_data

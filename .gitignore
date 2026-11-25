@@ -7,3 +7,5 @@ data/headsup.db
 data/report.md
 docs/index.html
 docs/status.json
+pit_data/
+pit_cache/
