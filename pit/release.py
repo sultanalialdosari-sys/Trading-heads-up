@@ -30,9 +30,10 @@ def _gh(*args, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(["gh", *args], check=check, capture_output=True, text=True)
 
 
-def upload(d: str, repo: str) -> None:
-    if _gh("release", "view", TAG, "-R", repo, check=False).returncode != 0:
-        _gh("release", "create", TAG, "-R", repo, "--title", "PIT data",
+def upload(d: str, repo: str, tag: str = TAG) -> None:
+    TAG_ = tag
+    if _gh("release", "view", TAG_, "-R", repo, check=False).returncode != 0:
+        _gh("release", "create", TAG_, "-R", repo, "--title", TAG_,
             "--notes", "مخزن البيانات نقطي الزمن (يُستبدل عند كل بناء). انظر manifest.json.")
     stage = tempfile.mkdtemp()
     files = []
@@ -44,20 +45,21 @@ def upload(d: str, repo: str) -> None:
             q = os.path.join(stage, flat(rel))
             shutil.copy(p, q)
             files.append(q)
-    _gh("release", "upload", TAG, "-R", repo, "--clobber", *files)
+    for i in range(0, len(files), 50):                    # دفعات حتى لا يطول سطر الأوامر
+        _gh("release", "upload", TAG_, "-R", repo, "--clobber", *files[i:i + 50])
     names = {os.path.basename(f) for f in files}
-    old = json.loads(_gh("release", "view", TAG, "-R", repo, "--json", "assets").stdout)["assets"]
+    old = json.loads(_gh("release", "view", TAG_, "-R", repo, "--json", "assets").stdout)["assets"]
     for a in old:                                         # احذف ملفات سنة/جزء لم تعد موجودة
         if a["name"] not in names:
-            _gh("release", "delete-asset", TAG, a["name"], "-R", repo, "-y", check=False)
-    print(f"رُفع {len(files)} ملف إلى Release {TAG}")
+            _gh("release", "delete-asset", TAG_, a["name"], "-R", repo, "-y", check=False)
+    print(f"رُفع {len(files)} ملف إلى Release {TAG_}")
 
 
-def download(d: str, repo: str) -> bool:
+def download(d: str, repo: str, tag: str = TAG) -> bool:
     stage = tempfile.mkdtemp()
-    r = _gh("release", "download", TAG, "-R", repo, "-D", stage, "--clobber", check=False)
+    r = _gh("release", "download", tag, "-R", repo, "-D", stage, "--clobber", check=False)
     if r.returncode != 0:
-        print(f"لا يوجد Release {TAG} بعد: {r.stderr.strip()[:200]}")
+        print(f"لا يوجد Release {tag} بعد: {r.stderr.strip()[:200]}")
         return False
     for name in os.listdir(stage):
         dst = os.path.join(d, unflat(name))
@@ -72,11 +74,12 @@ def main(argv=None):
     ap.add_argument("action", choices=["upload", "download"])
     ap.add_argument("--dir", default="pit_data")
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    ap.add_argument("--tag", default=TAG)
     a = ap.parse_args(argv)
     if not a.repo:
         sys.exit("حدد --repo أو GITHUB_REPOSITORY")
     os.makedirs(a.dir, exist_ok=True)
-    (upload if a.action == "upload" else download)(a.dir, a.repo)
+    (upload if a.action == "upload" else download)(a.dir, a.repo, a.tag)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,86 @@
+name: research-v3
+
+# الدراسة v3: اختبار الفرضيات المسجلة مسبقاً (research/hypotheses.jsonl). يدوي فقط.
+#   fetch   ينزّل شموع 5 دقائق لأيام المجموعة الشاملة إلى Release باسم r3-bars (قابل للاستئناف)
+#   analyze يحلل ويحكم — كل فرضية تُختبر مرة واحدة؛ السجل المحدَّث يُحفظ في فرع research
+#   all     الاثنان (التحليل يبدأ فقط إذا اكتمل التنزيل)
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: [all, fetch, analyze]
+        default: all
+      random:
+        description: "عدد سحبات الدخول العشوائي لكل صفقة اختبار"
+        default: "100"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pyarrow
+      - name: Inputs (PIT store, cached bars, research branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pit.release download --dir pit_data --tag pit-data
+          mkdir -p r3_bars research_out
+          python -m pit.release download --dir r3_bars --tag r3-bars || true
+          if git fetch --depth=1 origin +refs/heads/research:refs/remotes/origin/research; then
+            for f in $(git ls-tree --name-only origin/research); do git show origin/research:$f > research_out/$f; done
+          fi
+          # السجل: نتائج الاختبارات السابقة من فرع research + أي تسجيلات جديدة من main
+          python - <<'EOF'
+          import json, os
+          a = "research_out/hypotheses.jsonl"; b = "research/hypotheses.jsonl"
+          old = [json.loads(l) for l in open(a, encoding="utf-8")] if os.path.exists(a) else []
+          seen = {(e["event"], e["hid"]) for e in old}
+          new = [json.loads(l) for l in open(b, encoding="utf-8")]
+          merged = old + [e for e in new if (e["event"], e["hid"]) not in seen]
+          with open(a, "w", encoding="utf-8") as f:
+              f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in merged)
+          print("السجل:", len(merged), "حدث •", sum(e["event"] == "test" for e in merged), "اختبار سابق")
+          EOF
+      - name: Research v3
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          RESEARCH_RPM: "100"
+          PYTHONUNBUFFERED: "1"
+        run: >
+          python research_v3.py --stage "${{ inputs.stage }}" --pit pit_data --bars r3_bars --out research_out
+          --registry research_out/hypotheses.jsonl --max-fetch-min 290 --random "${{ inputs.random }}"
+      - name: Save bars cache
+        if: always() && inputs.stage != 'analyze'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m pit.release upload --dir r3_bars --tag r3-bars
+      - name: Summary
+        if: always()
+        run: |
+          [ -f research_out/REPORT_v3.md ] && cat research_out/REPORT_v3.md >> "$GITHUB_STEP_SUMMARY" || true
+          [ -f research_out/fetch_status.json ] && cat research_out/fetch_status.json >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Save results (research branch — keeps earlier files)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import os, sys; sys.path.insert(0, ".")
+          from hu import gitdata
+          files = {n: os.path.join("research_out", n) for n in os.listdir("research_out")
+                   if os.path.isfile(os.path.join("research_out", n))}
+          print(gitdata.publish(".", files, "research v3", branch="research"))
+          EOF
