@@ -177,7 +177,16 @@ class LiquidityMult(_Strict):
     rvol_lt_2: float = Field(1.3, ge=1)
 
 
+class Fees(_Strict):
+    """رسوم تنظيمية على البيع فقط (العمولة في Alpaca صفر). القيم الحالية تُطبق على كل التاريخ — تبسيط أثره
+    نحو 0.01% من الصفقة. المصادر: SEC Fee Rate Advisory FY2026، جدول رسوم FINRA 2026."""
+    sec_per_million: float = Field(20.60, ge=0)
+    taf_per_share: float = Field(0.000195, ge=0)
+    taf_max: float = Field(9.79, ge=0)
+
+
 class Costs(_Strict):
+    fees: Fees = Fees()
     scenarios: Dict[str, float] = {"optimistic": 0.003, "base": 0.005, "pessimistic": 0.010}
     judge_on: str = "base"
     spread_floor: PriceBuckets = PriceBuckets(lt_1=0.010, to_5=0.003)

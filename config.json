@@ -50,6 +50,7 @@
     "gap_rule": "fill_at_open"
   },
   "costs": {
+    "fees": { "sec_per_million": 20.60, "taf_per_share": 0.000195, "taf_max": 9.79 },
     "scenarios": { "optimistic": 0.003, "base": 0.005, "pessimistic": 0.010 },
     "judge_on": "base",
     "spread_floor": { "lt_1": 0.010, "1_to_5": 0.003 },
