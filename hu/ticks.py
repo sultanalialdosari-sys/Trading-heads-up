@@ -68,7 +68,7 @@ def fetch(client, symbol: str, kind: str, a: datetime, b: datetime, cache_ok: bo
             out.append(("T", t, float(r["p"]), int(r.get("s") or 0)))
         else:
             bp, ap = float(r.get("bp") or 0), float(r.get("ap") or 0)
-            if bp <= 0 or ap <= 0 or ap < bp:
+            if (bp <= 0 and ap <= 0) or (bp > 0 and ap > 0 and ap < bp):   # فارغ أو متقاطع
                 continue
             out.append(("Q", t, bp, ap))
     out.sort(key=lambda x: (x[1], 0 if x[0] == "T" else 1))
@@ -79,21 +79,30 @@ def fetch(client, symbol: str, kind: str, a: datetime, b: datetime, cache_ok: bo
     return out
 
 
-def _first_quote(qs: list, after: pd.Timestamp) -> Optional[tuple]:
+def _first_quote(qs: list, after: pd.Timestamp, side: str) -> Optional[tuple]:
+    """أول عرض بعد لحظة معينة فيه الجانب المطلوب: ask للشراء، bid للبيع."""
     for q in qs:
-        if q[1] >= after:
+        if q[1] >= after and (q[3] > 0 if side == "ask" else q[2] > 0):
             return q
     return None
 
 
-def _quotes_after(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list) -> Optional[tuple]:
-    q = _first_quote(pool, at)
+def _py(x: pd.Timestamp) -> datetime:
+    return x.floor("us").to_pydatetime()
+
+
+def _quotes_after(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, side: str) -> Optional[tuple]:
+    q = _first_quote(pool, at, side)
     if q is not None:
         return q
-    b = min(at + QUOTE_WAIT, cut)
-    if b <= at:
-        return None
-    return _first_quote(fetch(client, sym, "quotes", at.to_pydatetime(), b.to_pydatetime(), cache_ok=b < cut), at)
+    for wait in (QUOTE_WAIT, timedelta(minutes=10)):      # أسهم ضعيفة السيولة: قد يتأخر العرض الصالح
+        b = min(at + wait, cut)
+        if b <= at:
+            return None
+        q = _first_quote(fetch(client, sym, "quotes", _py(at), _py(b), cache_ok=b < cut), at, side)
+        if q is not None:
+            return q
+    return None
 
 
 def sell_fees(price: float, shares: int, fees: dict) -> float:
@@ -142,10 +151,11 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
         at = created + LATENCY
         if at >= cut:
             return None                              # لم يمر 15 دقيقة بعد — ننتظر
-        q = _quotes_after(client, sym, at, cut, [])
+        q = _quotes_after(client, sym, at, cut, [], "ask")
         if q is None:
             return None
-        detail["entry_spread_pct"] = round((q[3] - q[2]) / q[3] * 100, 2)
+        if q[2] > 0:
+            detail["entry_spread_pct"] = round((q[3] - q[2]) / q[3] * 100, 2)
         arm(q[3], q[1], "أمر سوق بسعر العرض")
         if status == "CANCELLED":
             return _out(t, status, None, q[1], None, None, None, note, sh, stop, detail)
@@ -173,8 +183,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
         if z <= a:
             continue
         full = z == ts + pd.Timedelta(minutes=1) and z <= cut
-        ev = fetch(client, sym, "trades", a.to_pydatetime(), z.to_pydatetime(), full) + \
-            fetch(client, sym, "quotes", a.to_pydatetime(), z.to_pydatetime(), full)
+        ev = fetch(client, sym, "trades", _py(a), _py(z), full) + fetch(client, sym, "quotes", _py(a), _py(z), full)
         ev.sort(key=lambda x: (x[1], 0 if x[0] == "T" else 1))
         qs = [e for e in ev if e[0] == "Q"]
         i = 0
@@ -191,11 +200,11 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
                     exit_at = e[1]
                     break
                 if e[2] >= t["trigger"]:
-                    q = _quotes_after(client, sym, e[1], cut, qs)
+                    q = _quotes_after(client, sym, e[1], cut, qs, "ask")
                     px = q[3] if q is not None else tick_up(max(e[2], t["trigger"]) * (1 + slip / 100))
                     at = q[1] if q is not None else e[1]
                     detail["trigger_print"] = e[2]
-                    if q is not None:
+                    if q is not None and q[2] > 0:
                         detail["entry_spread_pct"] = round((q[3] - q[2]) / q[3] * 100, 2)
                     arm(px, at, "وقف-شراء تفعّل بصفقة ثم تنفيذ بسعر العرض")
                     if status == "CANCELLED":
@@ -205,7 +214,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
                     continue
             else:  # OPEN
                 if e[0] == "T" and e[2] <= stop:
-                    q = _quotes_after(client, sym, e[1], cut, qs)
+                    q = _quotes_after(client, sym, e[1], cut, qs, "bid")
                     exit_px = q[2] if q is not None else round(e[2] * (1 - slip / 100), 4)
                     exit_at = q[1] if q is not None else e[1]
                     detail["stop_print"] = e[2]
@@ -213,7 +222,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
                     note = (f"وقف تفعّل بصفقة {I.fmt_price(e[2])} وتنفّذ بسعر الطلب {I.fmt_price(exit_px)}"
                             if exit_px < stop else "وقف تفعّل وتنفّذ عند الوقف أو أفضل")
                     break
-                if (e[0] == "T" and e[2] > target) or (e[0] == "Q" and e[2] > target):
+                if (e[0] == "T" and e[2] > target) or (e[0] == "Q" and e[2] > target):   # e[2] للعرض = الطلب (bid)
                     exit_px, exit_at, status = target, e[1], "TARGET"
                     note = "بيع محدد عند الهدف — تنفّذ لأن السعر تجاوزه"
                     break
@@ -222,7 +231,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
 
     if status in ("OPEN", "PENDING") and cut >= ex_t:
         if status == "OPEN":
-            q = _quotes_after(client, sym, ex_t, ex_t + QUOTE_WAIT, [])
+            q = _quotes_after(client, sym, ex_t, cut, [], "bid")
             if q is not None:
                 exit_px, exit_at = q[2], q[1]
             else:
@@ -234,7 +243,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
 
 
 def _iso(x: Optional[pd.Timestamp]) -> Optional[str]:
-    return None if x is None else x.to_pydatetime().isoformat()
+    return None if x is None else _py(x).isoformat()
 
 
 def _out(t, status, entry, entry_at, target, exit_px, exit_at, note, sh, stop, detail) -> dict:
