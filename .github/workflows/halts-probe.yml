@@ -1,0 +1,36 @@
+name: halts-probe
+# فحص يدوي لمحلل خلاصة توقفات Nasdaq: يعرض عدد العناصر الخام والمحللة لتاريخ معيّن (بلا حفظ أي شيء).
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "تاريخ التوقفات MMDDYYYY (فارغ = اليوم)"
+        default: ""
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: |
+          python - <<'PY'
+          import re, sys, requests
+          sys.path.insert(0, ".")
+          from hu import halts as HL
+          d = "${{ inputs.date }}".strip()
+          url = HL.URL + (f"&haltdate={d}" if d else "")
+          r = requests.get(url, timeout=20, headers={"User-Agent": "HeadsUp paper-trading monitor (research, non-commercial)"})
+          print("HTTP", r.status_code, "bytes", len(r.text))
+          raw = len(re.findall(r"<item[\s>]", r.text))
+          items = HL.parse(r.text)
+          print("raw items:", raw, "• parsed:", len(items))
+          m = re.search(r"<item[\s>].*?</item>", r.text, re.S)
+          print("first raw item:\n", (m.group(0) if m else r.text[:1500])[:1500])
+          for h in items[:8]:
+              print(h.symbol, h.reason, h.halt_date, h.halt_time, h.pause_price, h.resume_trade, "|", h.reason_ar)
+          sys.exit(0 if raw == len(items) else 1)
+          PY
