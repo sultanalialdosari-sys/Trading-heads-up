@@ -49,6 +49,63 @@ def pill(text, cls):
     return f"<span class='tag {cls}'>{E(text)}</span>"
 
 
+AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+
+def calendar_html(trades: List[dict]) -> str:
+    """تقويم يومي: مجموع الربح ومجموع الخسارة وصافي كل يوم من كل الصفقات الافتراضية المغلقة (كل الأنواع)."""
+    import calendar as _cal
+    from collections import defaultdict
+    days = defaultdict(lambda: {"win": 0.0, "loss": 0.0, "nw": 0, "nl": 0, "kinds": defaultdict(float)})
+    for t in trades:
+        if t.get("pnl") is None:
+            continue
+        d = days[t["day"]]
+        if t["pnl"] > 0:
+            d["win"] += t["pnl"]; d["nw"] += 1
+        else:
+            d["loss"] += t["pnl"]; d["nl"] += 1
+        d["kinds"][t["kind"]] += t["pnl"]
+    if not days:
+        return "<div class='muted' style='padding:14px'>لا صفقات مغلقة بعد.</div>"
+    months = sorted({k[:7] for k in days}, reverse=True)
+    wd = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"]
+    names = {"A": "A", "B": "B", "BASE": "مقارنة", "PRE": "قبل الافتتاح", "POST": "بعد الإغلاق"}
+    out = []
+    for mi, ym in enumerate(months):
+        y, m = int(ym[:4]), int(ym[5:])
+        tot = [v for k, v in days.items() if k.startswith(ym)]
+        mw, ml = sum(v["win"] for v in tot), sum(v["loss"] for v in tot)
+        cells = ""
+        for week in _cal.Calendar(firstweekday=0).monthdayscalendar(y, m):
+            if not any(week[:5]):
+                continue                                # أسبوع بلا أيام تداول في هذا الشهر
+            for dnum in week[:5]:                       # أيام التداول الأمريكية: الاثنين–الجمعة
+                if not dnum:
+                    cells += "<div class='cd empty'></div>"
+                    continue
+                key = f"{ym}-{dnum:02d}"
+                v = days.get(key)
+                if not v:
+                    cells += f"<div class='cd'><span class='dn'>{dnum}</span></div>"
+                    continue
+                net = v["win"] + v["loss"]
+                tip = " • ".join(f"{names.get(k, k)} {money(x)}" for k, x in v["kinds"].items())
+                cells += (f"<div class='cd has {'pos' if net > 0 else 'neg' if net < 0 else ''}' title='{E(tip)}'>"
+                          f"<span class='dn'>{dnum}</span>"
+                          f"<span class='cw'><bdi dir='ltr' class='mono'>+{v['win']:,.0f}$</bdi><i> · {v['nw']} رابحة</i></span>"
+                          f"<span class='cl'><bdi dir='ltr' class='mono'>{v['loss']:,.0f}$</bdi><i> · {v['nl']} خاسرة</i></span>"
+                          f"<b class='cn'><bdi dir='ltr' class='mono' style='color:{col(net)}'>{'+' if net > 0 else ''}{net:,.2f}$</bdi></b></div>")
+        out.append(f"<div class='calm' data-i='{mi}'{'' if mi == 0 else ' hidden'}>"
+                   f"<div class='calh'><button type='button' class='calp' {'disabled' if mi == len(months) - 1 else ''}>‹ السابق</button>"
+                   f"<b>{AR_MONTHS[m - 1]} {y}</b>"
+                   f"<button type='button' class='caln' {'disabled' if mi == 0 else ''}>التالي ›</button></div>"
+                   f"<div class='calsum'>ربح الشهر <bdi dir='ltr' class='mono' style='color:{GREEN}'>+{mw:,.2f}$</bdi> • خسارة الشهر "
+                   f"<bdi dir='ltr' class='mono' style='color:{RED}'>{ml:,.2f}$</bdi> • الصافي <bdi dir='ltr' class='mono' style='color:{col(mw + ml)}'>{'+' if mw + ml > 0 else ''}{mw + ml:,.2f}$</bdi></div>"
+                   f"<div class='calg'>{''.join(f'<div class=cwd>{w}</div>' for w in wd)}{cells}</div></div>")
+    return "".join(out)
+
+
 def table(head: List[str], rows: List[List[str]]) -> str:
     if not rows:
         return "<div class='empty'>لا شيء بعد.</div>"
@@ -469,12 +526,14 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 <li><b>أفضل ما وُجد:</b> سهم بدأ يتحرك (RVOL ≥ 5 وارتفاع 5–25%) مع وقف أوسع — موجب قليلاً في الفترتين، لكنه داخل هامش الخطأ.</li>
 <li>لذلك: التنبيهات هنا <b>للمراقبة لا للتنبؤ</b>، والحكم الحقيقي من النتائج الحية في الأسفل.</li>
 </ul></div>
-<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
 <section id="cands"><h2>المرشحون في آخر فحص — {E(PHASE_LABEL.get(last_phase, ''))} ({E(t_et(last_scan['started_utc']) if last_scan else '—')} الرياض)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
 <section id="alerts"><h2>سجل التنبيهات المبكرة (داخل الجلسة)</h2>{alert_html}</section>
 <section id="ext"><h2>قوائم ما قبل الافتتاح وبعد الإغلاق</h2><div class="muted">أسهم تحت 5$ تحركت 8%+ خارج الجلسة بحجم حقيقي. التفعيل = اختراق قمة تلك الفترة خلال الجلسة التالية، والنتيجة تُقاس من الجلسة فقط.</div>{ext_html}</section>
 <section id="trades"><h2>الصفقات الافتراضية ({cfg['shares_per_trade']} سهم لكل صفقة)</h2>{trade_html}</section>
+<section id="cal"><h2>تقويم الربح والخسارة اليومي</h2><div class="muted">لكل يوم: مجموع ربح الصفقات الرابحة (وعددها)، ومجموع خسارة الخاسرة (وعددها)، والصافي — من كل الصفقات الافتراضية المغلقة بكل أنواعها. مرّر المؤشر على اليوم لترى التوزيع حسب النوع. افتراضي فقط.</div>
+<div class="card">{calendar_html(trades)}</div></section>
 <section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت 5$ ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
 <footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
@@ -599,6 +658,15 @@ nav{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0;position:sticky;top:0;ba
 nav a{color:var(--txt);text-decoration:none;background:var(--card);border:1px solid var(--line);padding:7px 14px;border-radius:999px;font-size:13.5px}
 nav a:hover{border-color:var(--ink)}
 section{margin:22px 0 0}h2{font-size:17px;margin:6px 0}
+.calh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.calh button{background:var(--l2);color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font:inherit;font-size:13px;cursor:pointer}.calh button:disabled{opacity:.35;cursor:default}
+.calsum{font-size:13.5px;color:var(--mut);margin-bottom:10px}
+.calg{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.cwd{font-size:12px;color:var(--mut);text-align:center;padding:2px}
+bdi.mono{direction:ltr;unicode-bidi:isolate}.cd .cw,.cd .cl{white-space:nowrap}
+.cd{min-height:96px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;display:flex;flex-direction:column;gap:2px;background:var(--soft)}
+.cd.empty{border:0;background:none}.cd .dn{font-size:12px;color:var(--mut)}.cd i{font-style:normal;color:var(--mut);font-size:11px}
+.cd .cw{color:var(--g);font-size:12.5px}.cd .cl{color:var(--r);font-size:12.5px}.cd bdi{direction:ltr;unicode-bidi:isolate}
+.cd .cn{font-size:14px;margin-top:auto}.cd.pos{border-color:var(--g)}.cd.neg{border-color:var(--r)}
+@media(max-width:640px){.cd{min-height:64px;padding:4px}.cd .cw,.cd .cl{font-size:10.5px}.cd i{display:none}.cd .cn{font-size:11.5px}}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card);margin-top:8px}
 table{border-collapse:collapse;width:100%;min-width:900px}
 th,td{padding:9px 11px;border-bottom:1px solid var(--l2);text-align:right;vertical-align:top;font-size:13px}
@@ -676,5 +744,13 @@ SCRIPT = """<script>
   setT(root.getAttribute('data-theme')||'light');
   tick(); setInterval(tick,1000); poll(); setInterval(poll,60000);
 })();
+</script>
+<script>
+document.querySelectorAll('.calm').forEach(function(m){
+  function go(d){var i=+m.getAttribute('data-i')+d, t=document.querySelector('.calm[data-i="'+i+'"]');
+    if(t){m.hidden=true;t.hidden=false;}}
+  var p=m.querySelector('.calp'), n=m.querySelector('.caln');
+  if(p)p.onclick=function(){go(1)}; if(n)n.onclick=function(){go(-1)};
+});
 </script>
 """
