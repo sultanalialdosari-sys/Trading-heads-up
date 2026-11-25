@@ -224,6 +224,12 @@ class Engine:
         if kind == "final":
             if not snap_df.empty:
                 self.missed(day, snap_df)
+            if now - timedelta(minutes=16) >= TR.exit_time(day).astimezone(UTC):
+                try:                                   # أي صفقة (اليوم أو قبله) حُسبت بالشموع: نعيد حسابها بالثانية
+                    nxt = (datetime.fromisoformat(day) + timedelta(days=1)).strftime("%Y-%m-%d")
+                    info["refill"] = json.dumps(self.refill(now, nxt), ensure_ascii=False)
+                except Exception as e:                 # noqa: BLE001 — الدقة إضافة: لا توقف الإغلاق
+                    self.errors.append(f"refill: {type(e).__name__}: {e}"[:200])
             self.daily_summary(day)
             try:
                 CH.finalize_day(self.c, self.db, day, now)

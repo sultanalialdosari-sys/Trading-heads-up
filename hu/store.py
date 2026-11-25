@@ -54,6 +54,8 @@ class Store:
             self.db.execute("ALTER TABLE runs ADD COLUMN timing TEXT")
         if "config_hash" not in cols:
             self.db.execute("ALTER TABLE runs ADD COLUMN config_hash TEXT")
+        if "refill" not in cols:
+            self.db.execute("ALTER TABLE runs ADD COLUMN refill TEXT")
         tcols = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
         for c, typ in (("last_px", "REAL"), ("last_utc", "TEXT"), ("fill_src", "TEXT"), ("fees", "REAL"), ("fill_detail", "TEXT")):   # آخر سعر تابعه النظام (للربح غير المحقق)
             if c not in tcols:
