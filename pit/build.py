@@ -104,8 +104,9 @@ def _bars(c, syms, start, end, adj):
     raise RuntimeError(f"فشل جلب الشموع اليومية ({adj}) لـ {syms[0]}… بعد 4 محاولات")
 
 
-def build_daily(c, symbols, start, end, max_price, tmp) -> list:
-    """يكتب أجزاء مؤقتة ويرجع الرموز التي دخلت (سعرها الخام ≤ max_price في يوم ما)."""
+def build_daily(c, symbols, start, end, max_price, tmp, seen=None) -> list:
+    """يكتب أجزاء مؤقتة ويرجع الرموز التي دخلت (سعرها الخام ≤ max_price في يوم ما).
+    seen (اختياري): مجموعة تُملأ بكل رمز أعاد Alpaca له شموعاً — لقياس تغطية المشطوبة."""
     os.makedirs(tmp, exist_ok=True)
     kept, t0 = [], time.time()
     for i in range(0, len(symbols), CHUNK):
@@ -113,6 +114,8 @@ def build_daily(c, symbols, start, end, max_price, tmp) -> list:
         raw = bars_frame(_bars(c, part, start, end, "raw"))
         if raw.empty:
             continue
+        if seen is not None:
+            seen.update(raw["symbol"].unique())
         low = raw.groupby("symbol")["close"].min()
         penny = sorted(low[low <= max_price].index)
         if penny:
@@ -225,12 +228,17 @@ def main(argv=None):
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(os.path.join(a.out, "daily"), ignore_errors=True)
         syms = sorted(assets["symbol"].unique())
-        kept = build_daily(c, syms, start, end, a.max_price, tmp)
+        seen: set = set()
+        kept = build_daily(c, syms, start, end, a.max_price, tmp, seen)
+        st = assets.drop_duplicates("symbol").set_index("symbol")["status"]
+        cover = {k: {"symbols": int((st == k).sum()), "with_bars": int(st[st == k].index.isin(seen).sum()),
+                     "kept": int(st[st == k].index.isin(set(kept)).sum())} for k in ("active", "inactive")}
+        log(f"تغطية حسب الحالة: {cover}")
         spans = write_years(tmp, a.out)
         assets = assets[assets["symbol"].isin(set(kept))].drop(columns=["first_bar", "last_bar"], errors="ignore")
         assets = assets.merge(spans, left_on="symbol", right_index=True, how="left")
         man["daily"] = {"start": a.start, "end": end.isoformat(), "max_price_raw": a.max_price,
-                        "symbols_scanned": len(syms), "symbols_kept": len(set(kept)),
+                        "symbols_scanned": len(syms), "symbols_kept": len(set(kept)), "coverage_by_status": cover,
                         "requests": c.call_count, "built_utc": datetime.now(timezone.utc).isoformat()}
         log(f"يومي: {len(set(kept))} رمز من {len(syms)}")
 
