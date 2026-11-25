@@ -28,6 +28,16 @@ def params_hash(params: dict, config_hash: Optional[str] = None) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def research_config_hash(app) -> str:
+    """بصمة الأقسام التي تؤثر على نتيجة البحث فقط (التكاليف، الخروج، التنفيذ، التحقق)، بلا معاملات
+    الفرضية نفسها — فتغيير قواعد التنبيه الحي لا يكسر الفرضيات المسجلة، وتغيير التكاليف يكسرها."""
+    d = app.model_dump(mode="json")
+    sect = {k: d[k] for k in ("costs", "exits", "execution", "validation")}
+    for k in ("stop", "target_r"):
+        sect["exits"].pop(k, None)
+    return hashlib.sha256(json.dumps(sect, sort_keys=True).encode()).hexdigest()[:16]
+
+
 class Registry:
     def __init__(self, path: str):
         self.path = path
