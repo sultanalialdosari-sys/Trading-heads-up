@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import intraday as I
+from hu import charts as CH
 from hu import rules as RL
 from hu import trades as TR
 
@@ -526,19 +527,20 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 <li><b>أفضل ما وُجد:</b> سهم بدأ يتحرك (RVOL ≥ 5 وارتفاع 5–25%) مع وقف أوسع — موجب قليلاً في الفترتين، لكنه داخل هامش الخطأ.</li>
 <li>لذلك: التنبيهات هنا <b>للمراقبة لا للتنبؤ</b>، والحكم الحقيقي من النتائج الحية في الأسفل.</li>
 </ul></div>
-<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#charts">الرسوم البيانية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
 <section id="cands"><h2>المرشحون في آخر فحص — {E(PHASE_LABEL.get(last_phase, ''))} ({E(t_et(last_scan['started_utc']) if last_scan else '—')} الرياض)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
 <section id="alerts"><h2>سجل التنبيهات المبكرة (داخل الجلسة)</h2>{alert_html}</section>
 <section id="ext"><h2>قوائم ما قبل الافتتاح وبعد الإغلاق</h2><div class="muted">أسهم تحت 5$ تحركت 8%+ خارج الجلسة بحجم حقيقي. التفعيل = اختراق قمة تلك الفترة خلال الجلسة التالية، والنتيجة تُقاس من الجلسة فقط.</div>{ext_html}</section>
 <section id="trades"><h2>الصفقات الافتراضية ({cfg['shares_per_trade']} سهم لكل صفقة)</h2>{trade_html}</section>
+""" + CH.section_html(CH.build_items(store, alerts, trades)) + f"""
 <section id="cal"><h2>تقويم الربح والخسارة اليومي</h2><div class="muted">لكل يوم: مجموع ربح الصفقات الرابحة (وعددها)، ومجموع خسارة الخاسرة (وعددها)، والصافي — من كل الصفقات الافتراضية المغلقة بكل أنواعها. مرّر المؤشر على اليوم لترى التوزيع حسب النوع. افتراضي فقط.</div>
 <div class="card">{calendar_html(trades)}</div></section>
 <section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت 5$ ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
 <footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
 </div>"""
-            + SCRIPT + "</body></html>")
+            + SCRIPT + CH.SCRIPT + "</body></html>")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(page)
@@ -679,8 +681,9 @@ th{background:var(--soft);color:var(--mut);font-weight:600;position:sticky;top:0
 footer{margin-top:28px;text-align:center}
 .study{margin:6px 0 0;padding-inline-start:20px;line-height:1.9;font-size:14px}.study li{margin:2px 0}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-</style></head><body>
+/*CHARTS_CSS*/</style></head><body>
 """
+HEAD = HEAD.replace("/*CHARTS_CSS*/", CH.CSS)
 
 SCRIPT = """<script>
 (function(){

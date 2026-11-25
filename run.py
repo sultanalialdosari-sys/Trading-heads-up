@@ -73,6 +73,17 @@ def main(argv) -> int:
     ua = os.environ.get("SEC_USER_AGENT", "")
     if ua and "@" not in ua:
         print("⚠️ SEC_USER_AGENT يجب أن يحتوي بريداً (مثل: Rayan rayan@gmail.com)")
+    if "--charts" in argv:                     # إكمال رسوم الأيام السابقة فقط (بلا فحص ولا تنبيهات)
+        from hu import charts as CH
+        done = CH.backfill(client, store, datetime.now(timezone.utc), days=30)
+        store.commit()
+        print("رسوم مكتملة:", done)
+        site.build(store, os.path.join(DOCS, "index.html"), cfg)
+        store.close()
+        if in_actions:
+            gitdata.publish(BASE, files, "charts backfill")
+            gitdata.dispatch_site(BASE)
+        return 0
     eng = Engine(client, store, cfg, sec, tg)
     info = eng.run(kind, sched)
     site.build(store, os.path.join(DOCS, "index.html"), cfg)

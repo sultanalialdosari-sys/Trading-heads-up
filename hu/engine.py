@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 import intraday as I
+from hu import charts as CH
 from hu import config as C
 from hu import extended as X
 from hu import news as N
@@ -219,6 +220,11 @@ class Engine:
             if not snap_df.empty:
                 self.missed(day, snap_df)
             self.daily_summary(day)
+            try:
+                CH.finalize_day(self.c, self.db, day, now)
+                CH.backfill(self.c, self.db, now)
+            except Exception as e:                 # الرسوم إضافة: لا توقف الإغلاق
+                self.errors.append(f"charts: {type(e).__name__}: {e}"[:200])
             # تنظيف: المرشحون غير المؤهلين لأكثر من 3 أيام لا حاجة لهم (التنبيهات والصفقات تبقى)
             old = (now.astimezone(ET) - timedelta(days=3)).strftime("%Y-%m-%d")
             self.db.db.execute("DELETE FROM candidates WHERE day < ? AND qualifies = 0", (old,))
@@ -300,6 +306,7 @@ class Engine:
         for st in good:
             if self.maybe_alert(st, now, day, run_id, meta):
                 info["alerts"] += 1
+                self.chart_save(day, st.symbol, b5.get(st.symbol), "scan")
         # طريقة المقارنة
         taken = {r["symbol"] for r in self.db.q("SELECT symbol FROM trades WHERE day=? AND kind='BASE'", (day,))}
         for _, r in baseline_pick(snap_df, self.cfg, taken).iterrows():
@@ -382,6 +389,10 @@ class Engine:
         bars: Dict[str, pd.DataFrame] = {}
         for i in range(0, len(syms), 50):
             bars.update(self.c.bars(syms[i:i + 50], "1Min", start - timedelta(minutes=1), cut, feed="sip"))
+        charted = set(CH.chart_symbols(self.db, day))
+        for s in syms:
+            if s in charted:
+                self.chart_save(day, s, bars.get(s), "follow")
         for t in trades:
             r = TR.simulate(t, bars.get(t["symbol"]), cut, self.cfg["slippage_pct"], self.cfg["target_r"])
             self.db.update("trades", t["id"], **{k: v for k, v in r.items() if k in
@@ -403,6 +414,12 @@ class Engine:
                               f"الساعة {et_str(ev['at'])} الرياض قبل أن يخترق.")
             elif ev["state"] == "EXPIRED":
                 self.db.update("alerts", a["id"], state="EXPIRED")
+
+    def chart_save(self, day: str, symbol: str, df, source: str) -> None:
+        try:
+            CH.save(self.db, day, symbol, df, source)
+        except Exception as e:                     # الرسوم إضافة: لا توقف الفحص
+            self.errors.append(f"chart {symbol}: {type(e).__name__}"[:120])
 
     # ---------------------------------------------------------------- ما قبل الافتتاح / بعد الإغلاق
     def ext_scan(self, now: datetime, phase: str, snap_df: pd.DataFrame, info: dict, clock: dict) -> None:

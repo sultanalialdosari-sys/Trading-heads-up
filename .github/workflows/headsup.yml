@@ -17,7 +17,7 @@ on:
       mode:
         description: "loop = المشغّل المستمر • once = فحص واحد • pre / post / final"
         type: choice
-        options: [loop, once, pre, post, final]
+        options: [loop, once, pre, post, final, charts]
         default: loop
 
 permissions:
@@ -56,4 +56,5 @@ jobs:
             pre)   python run.py --pre ;;
             post)  python run.py --post ;;
             final) python run.py --final ;;
+            charts) python run.py --charts ;;
           esac

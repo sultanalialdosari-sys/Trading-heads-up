@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS missed (
 CREATE TABLE IF NOT EXISTS movers (
   day TEXT, symbol TEXT, first_utc TEXT, first_chg REAL, first_price REAL, PRIMARY KEY(day, symbol));
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, day TEXT, at_utc TEXT);
+CREATE TABLE IF NOT EXISTS chart_bars (day TEXT, symbol TEXT, bars TEXT, source TEXT, updated_utc TEXT, PRIMARY KEY (day, symbol));
 """
 
 
