@@ -347,6 +347,11 @@ def log_html(alerts, trades, last_cands, last_scan, missed) -> str:
 
 
 # ------------------------------------------------------------------ البناء
+def PX(cfg: dict) -> str:
+    """حد السعر كما في config.json (live.max_price)، مثل «7$»."""
+    return f"{cfg.get('max_price', 5):g}$"
+
+
 def build(store, out_path: str, cfg: dict) -> None:
     runs = store.q("SELECT * FROM runs ORDER BY id DESC LIMIT 60")
     last_scan = store.one("SELECT * FROM runs WHERE id IN (SELECT DISTINCT run_id FROM candidates) ORDER BY id DESC LIMIT 1")
@@ -380,7 +385,7 @@ def build(store, out_path: str, cfg: dict) -> None:
     n_missed = sum(1 for m in missed if m["day"] == day)
     agents = [
         ("ماسح السوق", "كل الأسهم المدرجة", f"{ls.get('swept') or 0:,}", "#2563eb", "radar"),
-        ("الفلتر", "تحت 5$ وحجم كافٍ", f"{ls.get('shortlist') or 0}", "#0891b2", "filter"),
+        ("الفلتر", f"تحت {PX(cfg)} وحجم كافٍ", f"{ls.get('shortlist') or 0}", "#0891b2", "filter"),
         ("محلل الشموع", "RVOL • تماسك • VWAP", f"{len(cands)}", "#7c3aed", "candle"),
         ("حارس SEC", "طرح • شطب • تجميع", f"{n_excl} محظور", "#dc2626", "shield"),
         ("قارئ الأخبار", "جوهري / ترويجي", f"{n_news}", "#db2777", "news"),
@@ -486,11 +491,11 @@ def build(store, out_path: str, cfg: dict) -> None:
     head_sub = (f"A: {len(closedA)} صفقة • {winsA} ربح / {len(closedA) - winsA} خسارة"
                 f" • B {money(sB.get('total_pnl')) if sB.get('trades') else '—'} • المقارنة {money(sBase.get('total_pnl')) if sBase.get('trades') else '—'}")
 
-    page = (HEAD
+    page = (HEAD.replace("__MAXPX__", PX(cfg))
             + f"""<header class="top">
 <div class="brand"><div class="logo">{icon('bell')}</div><div>
 <h1>التنبيه <span>المبكر</span></h1>
-<div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 5 دقائق في الجلسة • قبلها وبعدها كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت 5$ • Alpaca • SEC EDGAR</div>
+<div class="st"><span class="dot" id="dot"></span><span id="live">—</span> • فحص كل 5 دقائق في الجلسة • قبلها وبعدها كل 15 دقيقة • 10 وكلاء • أسهم أمريكية تحت {PX(cfg)} • Alpaca • SEC EDGAR</div>
 <div class="thm" id="thm" role="group" aria-label="المظهر"><button data-t="light"><i style="background:#f5f6f8"></i>فاتح</button><button data-t="dark"><i style="background:#171a21"></i>داكن</button><button data-t="night"><i style="background:#0a1410"></i>ليلي</button><button data-t="blue"><i style="background:#101d40"></i>أزرق</button></div>
 </div></div>
 <div class="bal"><div class="bv mono" style="color:{col(totA) if totA else 'var(--txt)'}">{E(money(totA) if closedA else '0.00$')}</div>
@@ -504,6 +509,8 @@ def build(store, out_path: str, cfg: dict) -> None:
   <div class="muted">آخر تحديث: {E(upd_txt)}</div>
   <div class="new" id="newv" hidden>وصل تحديث جديد — <a href="#" id="reload2">اعرضه</a></div>
 </div>
+<div id="tabs-top"></div><nav id="tabs" role="tablist"><a href="#overview">نظرة عامة</a><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#charts">الرسوم البيانية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+<section id="overview">
 <div class="card"><div class="ch"><span class="lab">الربح الافتراضي — {cfg['shares_per_trade']} سهم لكل صفقة</span>
 <span class="lg"><i class="la"></i>A عند التنبيه <i class="lb2"></i>B عند الاختراق <i class="lc"></i>المقارنة</span></div>
 {equity_html(trades)}</div>
@@ -527,20 +534,20 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 <li><b>الدراسة v3 (نوفمبر 2026، فرضيات مسجلة مسبقاً، أيام مختارة بلا نظر للنتيجة، تكاليف وتنفيذ واقعي):</b> الزخم داخل اليوم (ارتفاع 5–25% بحجم 3× وفوق VWAP) على 13,318 إشارة منذ 2016 — <b>مرفوض في الفرضيات الثلاث</b>: قبل التكاليف حول الصفر (−0.02 إلى −0.09R)، وبعد تكلفة نحو 1.6% للصفقة −0.29R بوقف واسع و−0.62R بوقف ضيق في سنوات الاختبار، وكل سنة سالبة. الدخول العشوائي في نفس الأسهم والأيام لم يكن أسوأ.</li>
 <li>لذلك: التنبيهات هنا <b>للمراقبة لا للتنبؤ</b>، والحكم الحقيقي من النتائج الحية في الأسفل.</li>
 </ul></div>
-<nav><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#charts">الرسوم البيانية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+</section>
 <section id="cands"><h2>المرشحون في آخر فحص — {E(PHASE_LABEL.get(last_phase, ''))} ({E(t_et(last_scan['started_utc']) if last_scan else '—')} الرياض)</h2>
 <div class="muted">مرتبون حسب الدرجة. ✔ = استوفى كل القواعد (حد التنبيه {cfg['min_score']}).</div>{cand_html}</section>
 <section id="alerts"><h2>سجل التنبيهات المبكرة (داخل الجلسة)</h2>{alert_html}</section>
-<section id="ext"><h2>قوائم ما قبل الافتتاح وبعد الإغلاق</h2><div class="muted">أسهم تحت 5$ تحركت 8%+ خارج الجلسة بحجم حقيقي. التفعيل = اختراق قمة تلك الفترة خلال الجلسة التالية، والنتيجة تُقاس من الجلسة فقط.</div>{ext_html}</section>
+<section id="ext"><h2>قوائم ما قبل الافتتاح وبعد الإغلاق</h2><div class="muted">أسهم تحت {PX(cfg)} تحركت 8%+ خارج الجلسة بحجم حقيقي. التفعيل = اختراق قمة تلك الفترة خلال الجلسة التالية، والنتيجة تُقاس من الجلسة فقط.</div>{ext_html}</section>
 <section id="trades"><h2>الصفقات الافتراضية ({cfg['shares_per_trade']} سهم لكل صفقة)</h2>{trade_html}</section>
 """ + CH.section_html(CH.build_items(store, alerts, trades)) + f"""
 <section id="cal"><h2>تقويم الربح والخسارة اليومي</h2><div class="muted">لكل يوم: مجموع ربح الصفقات الرابحة (وعددها)، ومجموع خسارة الخاسرة (وعددها)، والصافي — من كل الصفقات الافتراضية المغلقة بكل أنواعها. مرّر المؤشر على اليوم لترى التوزيع حسب النوع. افتراضي فقط.</div>
 <div class="card">{calendar_html(trades)}</div></section>
-<section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت 5$ ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
+<section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت {PX(cfg)} ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
 <footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
 </div>"""
-            + SCRIPT + CH.SCRIPT + "</body></html>")
+            + SCRIPT + CH.SCRIPT + TABS + "</body></html>")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(page)
@@ -549,9 +556,31 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
         json.dump({"updated": upd, "run": runs[0]["id"] if runs else None}, f)
 
 
+TABS = '''<script>
+(function(){
+ var nav=document.getElementById('tabs'); if(!nav) return;
+ var links=[].slice.call(nav.querySelectorAll('a')), ids=links.map(function(a){return a.getAttribute('href').slice(1)});
+ document.body.classList.add('tabs');
+ function show(){
+  var h=(location.hash||'').slice(1), id=ids.indexOf(h)>=0?h:'overview';
+  ids.forEach(function(x){var el=document.getElementById(x); if(el) el.classList.toggle('on',x===id)});
+  links.forEach(function(a){var on=a.getAttribute('href')==='#'+id; a.classList.toggle('on',on); a.setAttribute('aria-selected',on)});
+  try{sessionStorage.setItem('hu_tab',id)}catch(e){}
+  if(id==='charts'&&window.huRedrawChart) window.huRedrawChart();
+  var act=nav.querySelector('a.on'); if(act&&act.scrollIntoView) act.scrollIntoView({block:'nearest',inline:'center'});
+ }
+ links.forEach(function(a){a.addEventListener('click',function(e){e.preventDefault();
+  history.replaceState(null,'',a.getAttribute('href')); show();
+  var top=document.getElementById('tabs-top'); if(top&&window.scrollY>top.offsetTop) window.scrollTo({top:top.offsetTop})})});
+ window.addEventListener('hashchange',show);
+ if(!location.hash){try{var t=sessionStorage.getItem('hu_tab'); if(t&&ids.indexOf(t)>=0) history.replaceState(null,'','#'+t)}catch(e){}}
+ show();
+})();
+</script>'''
+
 HEAD = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>التنبيه المبكر — أسهم تحت 5$</title>
+<title>التنبيه المبكر — أسهم تحت __MAXPX__</title>
 <script>try{var t=localStorage.getItem("hu_theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -659,6 +688,10 @@ h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.2px}h1 span{color:va
 nav{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5}
 nav a{color:var(--txt);text-decoration:none;background:var(--card);border:1px solid var(--line);padding:7px 14px;border-radius:999px;font-size:13.5px}
 nav a:hover{border-color:var(--ink)}
+nav a.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+nav{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}nav a{white-space:nowrap;flex:0 0 auto}
+body.tabs .wrap>section{display:none}body.tabs .wrap>section.on{display:block}
+#overview>.card:first-child{margin-top:12px}
 section{margin:22px 0 0}h2{font-size:17px;margin:6px 0}
 .calh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.calh button{background:var(--l2);color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font:inherit;font-size:13px;cursor:pointer}.calh button:disabled{opacity:.35;cursor:default}
 .calsum{font-size:13.5px;color:var(--mut);margin-bottom:10px}

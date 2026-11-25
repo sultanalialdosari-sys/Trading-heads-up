@@ -240,6 +240,7 @@ SCRIPT = """<script src="%s"></script>
  }
  var sel=document.getElementById('chsel');
  sel.addEventListener('change',function(){draw(sel.value)});
+ window.huRedrawChart=function(){draw(sel.value)};      // الرسم يُعاد عند فتح تبويبه (كان مخفياً بلا حجم)
  draw(sel.value);
  new MutationObserver(function(){draw(sel.value)}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();

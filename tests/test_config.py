@@ -42,6 +42,7 @@ class TestConfig(unittest.TestCase):
         cfg = load_cfg(PATH)
         expected = dict(RL.DEFAULTS)
         expected.update(X.EXT_DEFAULTS)
+        expected["max_price"] = 7.0          # تغيير مقصود (25 نوفمبر 2026): توسيع المراقبة إلى 7$
         for k, v in expected.items():
             self.assertEqual(cfg[k], v, k)
         self.assertEqual(len(cfg["_config_hash"]), 64)
@@ -97,7 +98,7 @@ class TestConfig(unittest.TestCase):
         rejects(self, d, "same_bar_rule")
 
     def test_bad_ranges(self):
-        d = raw(); d["live"]["min_price"] = 6
+        d = raw(); d["live"]["min_price"] = 8          # فوق max_price (7)
         rejects(self, d, "min_price")
         d = raw(); d["filters"]["gap_pct"] = {"min": 50, "max": 10}
         rejects(self, d, "النطاق")
