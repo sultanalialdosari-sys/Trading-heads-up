@@ -15,6 +15,7 @@ from hu import charts as CH
 from hu import equity as EQ
 from hu import halts as HL
 from hu import rules as RL
+from hu import timefmt as TF
 from hu import trades as TR
 
 E = lambda x: html.escape("" if x is None else str(x))
@@ -33,7 +34,7 @@ PARTS_MAX = [("الحجم", 30), ("التماسك", 35), ("الاتجاه", 20),
 def t_et(iso):
     if not iso:
         return "—"
-    return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%m-%d %H:%M")   # بتوقيت الرياض
+    return TF.dh12(datetime.fromisoformat(iso).astimezone(I.RIYADH))   # بتوقيت الرياض، 12 ساعة
 
 
 def t_sec(iso, precise):
@@ -41,7 +42,7 @@ def t_sec(iso, precise):
     if not iso:
         return "—"
     d = datetime.fromisoformat(iso).astimezone(I.RIYADH)
-    return d.strftime("%m-%d %H:%M:%S") if precise else d.strftime("%m-%d %H:%M")
+    return TF.dh12(d, seconds=precise)
 
 
 def fill_tag(t):
@@ -54,7 +55,7 @@ def fill_tag(t):
 
 
 def hm_et(iso):
-    return "—" if not iso else datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
+    return "—" if not iso else TF.h12(datetime.fromisoformat(iso).astimezone(I.RIYADH))
 
 
 def money(v):
@@ -413,12 +414,12 @@ def halts_html(store, cfg: dict, alerts: List[dict], trades: List[dict]) -> str:
         act = h.active(now)
         star = "★ " if h.symbol in mine else ""
         body.append([
-            f"<span class='mono'>{ha.astimezone(I.RIYADH).strftime('%H:%M:%S' if h.halt_date == day else '%Y-%m-%d %H:%M') if ha else '—'}</span>"
+            f"<span class='mono'>{(TF.h12(ha.astimezone(I.RIYADH), True) if h.halt_date == day else TF.dh12(ha.astimezone(I.RIYADH), year=True)) if ha else '—'}</span>"
             + ("" if h.halt_date == day else "<div class='muted' style='font-size:12px'>توقف مستمر منذ أيام</div>"),
             f"<b class='mono'>{star}{E(h.symbol)}</b><div class='muted' style='font-size:12px'>{E(h.name[:40])}</div>",
             f"{E(h.reason_ar)} <span class='muted mono'>({E(h.reason)})</span>",
             "—" if not h.pause_price else f"<span class='mono'>{I.fmt_price(h.pause_price)}</span>",
-            "—" if not ra else f"<span class='mono'>{ra.astimezone(I.RIYADH).strftime('%H:%M:%S')}</span>",
+            "—" if not ra else f"<span class='mono'>{TF.h12(ra.astimezone(I.RIYADH), True)}</span>",
             f"<b style='color:{RED if act else GREEN}'>{'موقوف الآن' if act else 'استؤنف'}</b>",
         ])
     note = (f"<div class='muted'>يوم {E(day)} • {len(body)} توقفاً" + (f" (أُخفي {hidden} لأسهم سعر إيقافها فوق {cap:g}$)" if hidden else "")
@@ -551,7 +552,7 @@ def build(store, out_path: str, cfg: dict) -> None:
                        "طلبات Alpaca", "المدة", "أخطاء"], rrow)
 
     upd = runs[0]["started_utc"] if runs else None
-    upd_txt = "—" if not upd else (datetime.fromisoformat(upd).astimezone(I.RIYADH).strftime("%Y-%m-%d %H:%M") + " بتوقيت الرياض")
+    upd_txt = "—" if not upd else (TF.dh12(datetime.fromisoformat(upd).astimezone(I.RIYADH), year=True) + " بتوقيت الرياض")
 
     def tile(label, value, sub="", color="var(--txt)"):
         return f"<div class='tile'><span>{label}</span><b class='mono' style='color:{color}'>{value}</b><small>{sub}</small></div>"
@@ -814,7 +815,7 @@ SCRIPT = """<script>
     if(m>=9*60+30&&m<16*60) return min%5===2; if(m>=16*60&&m<20*60) return min%15===2; return false; }
   var bar=document.querySelector('.bar'), updated=bar.getAttribute('data-updated');
   var nyF=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,weekday:'short',hour:'2-digit',minute:'2-digit'});
-  var ryF=new Intl.DateTimeFormat('ar-SA-u-nu-latn',{timeZone:'Asia/Riyadh',weekday:'long',hour:'numeric',minute:'2-digit'});
+  var ryF=new Intl.DateTimeFormat('ar-SA-u-nu-latn',{timeZone:'Asia/Riyadh',weekday:'long',hour:'numeric',minute:'2-digit',hour12:true});
   function ny(d){var o={};nyF.formatToParts(d).forEach(function(p){o[p.type]=p.value});return {wd:o.weekday,m:(+o.hour%24)*60+(+o.minute),min:+o.minute};}
   function nextScan(now){
     var t=new Date(now.getTime()); t.setSeconds(0,0); t=new Date(t.getTime()+60000);

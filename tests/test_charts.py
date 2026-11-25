@@ -139,3 +139,12 @@ class TestEquity(unittest.TestCase):
         self.assertIn('id=\'eqdata\'', html)
         self.assertIn("eqwrap", html)
         self.assertIn("بعد أول صفقة", EQ.section([]))
+
+
+def test_twelve_hour_format():
+    from datetime import datetime
+    from hu import timefmt as TF
+    assert TF.h12(datetime(2026, 11, 25, 0, 5)) == "12:05 ص"
+    assert TF.h12(datetime(2026, 11, 25, 12, 30)) == "12:30 م"
+    assert TF.h12(datetime(2026, 11, 25, 17, 4, 9), seconds=True) == "5:04:09 م"
+    assert TF.dh12(datetime(2026, 11, 25, 9, 7)) == "11-25 9:07 ص"

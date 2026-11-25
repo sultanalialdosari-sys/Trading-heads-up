@@ -93,17 +93,19 @@ SCRIPT = """<script>
  function money(x){return (x>0?'+':x<0?'−':'')+Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'$'}
  function pad(n){return (n<10?'0':'')+n}
  var AR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
- function when(t){var d=new Date(t*1000);return d.getUTCDate()+' '+AR[d.getUTCMonth()]+' • '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+' الرياض'}
+ function h12(t){var d=new Date(t*1000),h=d.getUTCHours();return (h%12||12)+':'+pad(d.getUTCMinutes())+(h<12?' ص':' م')}
+ function tick12(t,type){var d=new Date(t*1000);return type>=3?h12(t):type===2?d.getUTCDate()+' '+AR[d.getUTCMonth()]:null}
+ function when(t){var d=new Date(t*1000);return d.getUTCDate()+' '+AR[d.getUTCMonth()]+' • '+h12(t)+' الرياض'}
  function draw(){
   if(chart){chart.remove();chart=null;S={}}
   chart=LC.createChart(el,{autoSize:true,
    layout:{background:{type:'solid',color:'transparent'},textColor:v('--mut'),attributionLogo:true,fontSize:11},
    grid:{vertLines:{visible:false},horzLines:{color:v('--l2')}},
    rightPriceScale:{borderVisible:false,scaleMargins:{top:0.12,bottom:0.08}},
-   timeScale:{borderVisible:false,timeVisible:true,secondsVisible:false,minBarSpacing:0.5,rightOffset:2},
+   timeScale:{borderVisible:false,timeVisible:true,secondsVisible:false,minBarSpacing:0.5,rightOffset:2,tickMarkFormatter:tick12},
    crosshair:{mode:LC.CrosshairMode.Magnet,vertLine:{color:v('--mut'),width:1,style:3,labelBackgroundColor:v('--ink')},
               horzLine:{color:v('--mut'),width:1,style:3,labelBackgroundColor:v('--ink')}},
-   localization:{priceFormatter:function(p){return money(p)}},
+   localization:{priceFormatter:function(p){return money(p)},timeFormatter:function(t){return when(t)}},
    handleScale:{axisPressedMouseMove:true,mouseWheel:true,pinch:true},handleScroll:{mouseWheel:false,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false}});
   D.series.forEach(function(s){
    var c=v(s.c), o={color:c,lineWidth:s.k==='A'?2.5:1.75,lineType:1,lastValueVisible:true,priceLineVisible:false,

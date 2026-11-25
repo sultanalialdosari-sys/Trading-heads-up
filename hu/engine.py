@@ -22,6 +22,7 @@ from hu import extended as X
 from hu import news as N
 from hu import rules as RL
 from hu import ticks as TK
+from hu import timefmt as TF
 from hu import trades as TR
 from hu.sec import SecClient
 from hu.store import Store
@@ -51,7 +52,7 @@ def et_str(iso: Optional[str]) -> str:
     """الوقت بتوقيت الرياض (الاسم القديم أُبقي حتى لا تنكسر الاستدعاءات)."""
     if not iso:
         return "غير متوفر"
-    return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
+    return TF.h12(datetime.fromisoformat(iso).astimezone(I.RIYADH))
 
 
 SWEEP_EXTRA: dict = {}

@@ -214,6 +214,10 @@ SCRIPT = """<script src="%s"></script>
  function v(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()||'#888'}
  function col(k){return {g:v('--g'),r:v('--r'),b:v('--b'),a:v('--a')}[k]||v('--mut')}
  function fmt(p){return p<1?p.toFixed(4):p.toFixed(2)}
+ function pad(n){return (n<10?'0':'')+n}
+ // الأوقات مخزنة بتوقيت الرياض كأنها UTC — نعرضها بنظام 12 ساعة (ص/م)
+ function h12(t){var d=new Date(t*1000),h=d.getUTCHours();return (h%%12||12)+':'+pad(d.getUTCMinutes())+(h<12?' ص':' م')}
+ function tick12(t,type){var d=new Date(t*1000);return type>=3?h12(t):type===2?d.getUTCDate()+'/'+(d.getUTCMonth()+1):null}
  function draw(id){
   var it=byId[id]; if(!it) return;
   if(chart){chart.remove();chart=null}
@@ -221,8 +225,8 @@ SCRIPT = """<script src="%s"></script>
    layout:{background:{type:'solid',color:v('--card')},textColor:v('--txt'),attributionLogo:true},
    grid:{vertLines:{color:v('--l2')},horzLines:{color:v('--l2')}},
    rightPriceScale:{borderColor:v('--line')},
-   timeScale:{borderColor:v('--line'),timeVisible:true,secondsVisible:false,minBarSpacing:0.5},
-   localization:{priceFormatter:fmt}});
+   timeScale:{borderColor:v('--line'),timeVisible:true,secondsVisible:false,minBarSpacing:0.5,tickMarkFormatter:tick12},
+   localization:{priceFormatter:fmt,timeFormatter:function(t){var d=new Date(t*1000);return d.getUTCDate()+'/'+(d.getUTCMonth()+1)+' '+h12(t)}}});
   cs=chart.addSeries(LC.CandlestickSeries,{upColor:v('--g'),downColor:v('--r'),borderVisible:false,
    wickUpColor:v('--g'),wickDownColor:v('--r'),priceFormat:{type:'price',precision:it.bars[0][4]<1?4:2,minMove:it.bars[0][4]<1?0.0001:0.01}});
   cs.setData(it.bars.map(function(b){return {time:b[0],open:b[1],high:b[2],low:b[3],close:b[4]}}));

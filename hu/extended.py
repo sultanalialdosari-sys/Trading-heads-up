@@ -17,6 +17,7 @@ import pandas as pd
 
 import intraday as I
 from hu import rules as RL
+from hu import timefmt as TF
 
 ET, UTC = I.ET, I.UTC
 
@@ -252,6 +253,7 @@ def alert_text(st: ExtSetup, eval_from: Optional[datetime]) -> str:
 def _ry(iso: Optional[str]) -> str:
     if not iso:
         return "غير متوفر"
-    return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%a %H:%M").replace(
+    d = datetime.fromisoformat(iso).astimezone(I.RIYADH)
+    return (d.strftime("%a ") + TF.h12(d)).replace(
         "Mon", "الاثنين").replace("Tue", "الثلاثاء").replace("Wed", "الأربعاء").replace("Thu", "الخميس").replace(
         "Fri", "الجمعة").replace("Sat", "السبت").replace("Sun", "الأحد")
