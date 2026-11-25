@@ -67,14 +67,19 @@ def replay(db: Store, app) -> pd.DataFrame:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=os.path.join(BASE, "data", "headsup.db"))
+    ap.add_argument("--validate", action="store_true", help="تقرير التحقق الإحصائي على الصفقات المعادة (بلا سجل فرضيات)")
     a = ap.parse_args(argv)
-    x = replay(Store(a.db), C.load(os.path.join(BASE, "config.json")))
+    app = C.load(os.path.join(BASE, "config.json"))
+    x = replay(Store(a.db), app)
     pd.set_option("display.width", 200)
     print(x.to_string(index=False))
     f = x[x.skipped.isna()]
     print(f"\nصفقات: {len(x)} • نُفذت في المحاكاة: {len(f)} • تخطتها (فجوة): {x.skipped.notna().sum()}")
     print("متوسط R:", {k: round(f[k].mean(), 3) for k in ["r_live", "r_gross", *[f"r_{s}" for s in SCEN]]})
     print("متوسط التكلفة الفعلية %:", round(f.cost_pct.mean(), 2), "• أسباب الخروج:", f.exit_reason.value_counts().to_dict())
+    if a.validate:
+        from bt.validate import build_report, to_markdown
+        print("\n" + to_markdown(build_report("live-A-replay", f, app)))
 
 
 if __name__ == "__main__":
