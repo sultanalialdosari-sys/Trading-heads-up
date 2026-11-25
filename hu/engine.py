@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 import intraday as I
+from hu import config as C
 from hu import extended as X
 from hu import news as N
 from hu import rules as RL
@@ -26,10 +27,11 @@ ET, UTC = I.ET, I.UTC
 
 
 def load_cfg(path: str) -> dict:
-    cfg = dict(RL.DEFAULTS)
-    cfg.update(X.EXT_DEFAULTS)
-    if os.path.exists(path):
-        cfg.update(json.load(open(path, encoding="utf-8")))
+    """يقرأ config.json (v3 أو القديم المسطح) ويتحقق منه، ويرجع قاموس النظام الحي بنفس الشكل القديم.
+    أي إعداد مرفوض يوقف التشغيل برسالة واضحة (ConfigError) بدل أن يعمل بقيم خاطئة."""
+    app = C.load(path)
+    cfg = app.live_dict()
+    cfg["_config_hash"] = C.file_hash(path)
     return cfg
 
 
@@ -177,7 +179,8 @@ class Engine:
         day = now.astimezone(ET).strftime("%Y-%m-%d")
         info = {"kind": kind, "started_utc": now.isoformat(), "scheduled_utc": scheduled_utc.isoformat() if scheduled_utc else None,
                 "delay_min": round((now - scheduled_utc).total_seconds() / 60, 1) if scheduled_utc else None,
-                "universe": 0, "swept": 0, "shortlist": 0, "qualified": 0, "alerts": 0}
+                "universe": 0, "swept": 0, "shortlist": 0, "qualified": 0, "alerts": 0,
+                "config_hash": (self.cfg.get("_config_hash") or "")[:12] or None}
         calls0 = I.API_STATS["total"]
         self.run_id = self.db.insert("runs", {"kind": kind, "started_utc": info["started_utc"]})
         info["market_open"] = int(bool(clock.get("is_open")))

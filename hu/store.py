@@ -49,6 +49,8 @@ class Store:
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}
         if "timing" not in cols:
             self.db.execute("ALTER TABLE runs ADD COLUMN timing TEXT")
+        if "config_hash" not in cols:
+            self.db.execute("ALTER TABLE runs ADD COLUMN config_hash TEXT")
 
     def q(self, sql: str, args=()) -> list:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]

@@ -20,6 +20,7 @@ sys.path.insert(0, BASE)
 
 import intraday as I  # noqa: E402
 from hu import gitdata, site  # noqa: E402
+from hu.config import ConfigError  # noqa: E402
 from hu.engine import Engine, load_cfg  # noqa: E402
 from hu.sec import SecClient  # noqa: E402
 from hu.store import Store  # noqa: E402
@@ -38,7 +39,11 @@ def scheduled_time(now: datetime, minutes) -> datetime:
 
 
 def main(argv) -> int:
-    cfg = load_cfg(os.path.join(BASE, "config.json"))
+    try:
+        cfg = load_cfg(os.path.join(BASE, "config.json"))
+    except ConfigError as e:
+        print(f"::error::{e}".replace("\n", "%0A"))
+        sys.exit(2)
     files = {"headsup.db": os.path.join(DATA, "headsup.db"), "report.md": os.path.join(DATA, "report.md")}
     in_actions = bool(os.environ.get("GITHUB_ACTIONS"))
     if in_actions:
