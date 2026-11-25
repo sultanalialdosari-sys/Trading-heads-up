@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import intraday as I
 from hu import charts as CH
+from hu import equity as EQ
 from hu import rules as RL
 from hu import trades as TR
 
@@ -531,7 +532,7 @@ def build(store, out_path: str, cfg: dict) -> None:
 <section id="overview">
 <div class="card"><div class="ch"><span class="lab">الربح الافتراضي — {cfg['shares_per_trade']} سهم لكل صفقة</span>
 <span class="lg"><i class="la"></i>A عند التنبيه <i class="lb2"></i>B عند الاختراق <i class="lc"></i>المقارنة</span></div>
-{equity_html(trades)}</div>
+{EQ.section(trades)}</div>
 {tiles}
 <div class="card"><div class="ch"><span class="lab">مدار الوكلاء — كلهم متصلون بالمحرك</span>
 <span class="muted">أرقام آخر فحص {E(t_et(ls.get('started_utc')) if ls else '—')} الرياض</span></div>
@@ -565,7 +566,7 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
 <footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
 </div>"""
-            + SCRIPT + CH.SCRIPT + TABS + "</body></html>")
+            + SCRIPT + CH.SCRIPT + EQ.SCRIPT + TABS + "</body></html>")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(page)
@@ -585,6 +586,7 @@ TABS = '''<script>
   links.forEach(function(a){var on=a.getAttribute('href')==='#'+id; a.classList.toggle('on',on); a.setAttribute('aria-selected',on)});
   try{sessionStorage.setItem('hu_tab',id)}catch(e){}
   if(id==='charts'&&window.huRedrawChart) window.huRedrawChart();
+  if(id==='overview'&&window.huRedrawEquity) window.huRedrawEquity();
   var act=nav.querySelector('a.on'); if(act&&act.scrollIntoView) act.scrollIntoView({block:'nearest',inline:'center'});
  }
  links.forEach(function(a){a.addEventListener('click',function(e){e.preventDefault();
@@ -737,7 +739,7 @@ footer{margin-top:28px;text-align:center}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /*CHARTS_CSS*/</style></head><body>
 """
-HEAD = HEAD.replace("/*CHARTS_CSS*/", CH.CSS)
+HEAD = HEAD.replace("/*CHARTS_CSS*/", CH.CSS + EQ.CSS)
 
 SCRIPT = """<script>
 (function(){

@@ -115,3 +115,27 @@ class TestCharts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEquity(unittest.TestCase):
+    def test_equity_series_and_detail(self):
+        from hu import equity as EQ
+        tr = [
+            {"kind": "A", "symbol": "AAA", "pnl": 50.0, "r_mult": 1.0, "exit_utc": "2026-11-24T15:00:00+00:00", "status": "TARGET"},
+            {"kind": "BASE", "symbol": "ZZZ", "pnl": -20.0, "r_mult": -1.0, "exit_utc": "2026-11-24T15:00:00+00:00", "status": "STOP"},
+            {"kind": "PRE", "symbol": "PPP", "pnl": -10.0, "r_mult": None, "exit_utc": "2026-11-24T16:00:00+00:00", "status": "TIME"},
+            {"kind": "A", "symbol": "OPEN", "pnl": None, "exit_utc": None},
+        ]
+        d = EQ.build(tr)
+        keys = [s["k"] for s in d["series"]]
+        self.assertEqual(keys, ["A", "EXT", "BASE"])                       # B غير مستخدم فلا يظهر
+        a = next(s for s in d["series"] if s["k"] == "A")["d"]
+        self.assertEqual([p[1] for p in a], [0.0, 50.0, 50.0])              # خط درجي يبدأ من الصفر
+        t0 = int(datetime(2026, 11, 24, 15, 0, tzinfo=timezone.utc).timestamp()) + CH.RIYADH_OFFSET
+        self.assertEqual(a[1][0], t0)
+        self.assertEqual(sorted(x["s"] for x in d["detail"][t0]), ["AAA", "ZZZ"])
+        self.assertEqual(d["n"], 3)
+        html = EQ.section(tr)
+        self.assertIn('id=\'eqdata\'', html)
+        self.assertIn("eqwrap", html)
+        self.assertIn("بعد أول صفقة", EQ.section([]))
