@@ -50,15 +50,16 @@ def setup_function(_):
     TK._CACHE.clear()
 
 
-def test_entry_at_ask_after_latency_and_stop_slips_to_bid():
+def test_entry_at_prevailing_ask_and_stop_slips_to_bid():
     c = Stub(trades=[(70, 1.89, 300, ["@"])],
              quotes=[(0.5, 1.99, 2.00), (1.2, 2.00, 2.02), (70.2, 1.86, 1.88)])
     r = TK.simulate(trade(), bars([[2.0, 2.01, 1.99, 2.0], [1.95, 1.96, 1.85, 1.87]]), CUT, c, 0.5, 2.0)
     assert r["fill_src"] == "tick"
-    assert r["entry"] == 2.02 and r["entry_utc"].endswith("16:00:01.200000+00:00")   # أول عرض بعد ثانية، لا قبلها
-    assert r["target"] == 2.26                                                     # 2.02 + 2×0.12
+    # العرض الساري لحظة وصول الأمر (16:00:01) هو تحديث 16:00:00.5، لا التحديث اللاحق
+    assert r["entry"] == 2.00 and r["entry_utc"].endswith("16:00:01+00:00")
+    assert r["target"] == 2.20                                                     # 2.00 + 2×0.10
     assert r["status"] == "STOP" and r["exit"] == 1.86                             # انزلاق حقيقي تحت الوقف 1.90
-    assert r["exit_utc"].endswith("16:01:10.200000+00:00")
+    assert r["exit_utc"].endswith("16:01:10.250000+00:00")                         # صفقة التفعيل + 250ms
     assert "1.86" in r["note"]
 
 
@@ -120,3 +121,10 @@ def test_base_stop_follows_actual_entry():
     c = Stub(quotes=[(1.1, 0.99, 1.01)])
     r = TK.simulate(t, bars([[1.0, 1.01, 0.99, 1.0]]), datetime(2026, 11, 20, 17, 0, tzinfo=UTC), c, 0.5, 2.0, 2.0)
     assert r["entry"] == 1.01 and r["stop"] == 0.9696
+
+
+def test_quiet_stock_uses_standing_quote():
+    # سهم هادئ: آخر تحديث عروض قبل التنبيه بـ40 ثانية ولا تحديث بعده — العرض ما زال قائماً وقابلاً للتنفيذ
+    c = Stub(quotes=[(-40, 1.98, 2.01)])
+    r = TK.simulate(trade(), bars([[2.0, 2.01, 1.99, 2.0]]), datetime(2026, 11, 20, 17, 0, tzinfo=UTC), c, 0.5, 2.0, 2.0)
+    assert r["fill_src"] == "tick" and r["entry"] == 2.01 and r["status"] == "OPEN"

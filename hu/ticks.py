@@ -80,46 +80,70 @@ def fetch(client, symbol: str, kind: str, a: datetime, b: datetime, cache_ok: bo
     return out
 
 
-def _first_quote(qs: list, after: pd.Timestamp, side: str) -> Optional[tuple]:
-    """أول عرض بعد لحظة معينة فيه الجانب المطلوب: ask للشراء، bid للبيع."""
-    for q in qs:
-        if q[1] >= after and (q[3] > 0 if side == "ask" else q[2] > 0):
-            return q
-    return None
+ARRIVE = timedelta(milliseconds=250)  # من صفقة التفعيل إلى وصول أمر السوق
 
 
 def _py(x: pd.Timestamp) -> datetime:
     return x.floor("us").to_pydatetime()
 
 
-def _quotes_after(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, side: str) -> Optional[tuple]:
-    q = _first_quote(pool, at, side)
-    if q is not None:
-        return q
-    for wait in (QUOTE_WAIT, timedelta(minutes=10)):      # أسهم ضعيفة السيولة: قد يتأخر العرض الصالح
-        b = min(at + wait, cut)
-        if b <= at:
-            return None
-        q = _first_quote(fetch(client, sym, "quotes", _py(at), _py(b), cache_ok=b < cut), at, side)
-        if q is not None:
-            return q
+def _ok(q: tuple, side: str) -> bool:
+    return q[3] > 0 if side == "ask" else q[2] > 0
+
+
+def nbbo_at(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, side: str) -> Optional[tuple]:
+    """أفضل عرض/طلب «سارٍ» لحظة وصول الأمر = آخر تحديث عروض قبلها.
+    مهم للأسهم الهادئة: العرض قد يبقى ثابتاً دقائق بلا أي تحديث جديد، لكنه موجود وقابل للتنفيذ."""
+    if at > cut:
+        return None
+    best = None
+    for q in pool:
+        if q[1] > at:
+            break
+        if _ok(q, side):
+            best = q
+    if best is not None:
+        return ("Q", at, best[2], best[3])
+    for back in (timedelta(seconds=5), timedelta(minutes=1), timedelta(minutes=10)):
+        lb = [q for q in fetch(client, sym, "quotes", _py(at - back), _py(at), cache_ok=True) if _ok(q, side)]
+        if lb:
+            q = lb[-1]
+            return ("Q", at, q[2], q[3])
     return None
+
+
+def _next_quotes(client, sym, at: pd.Timestamp, until: pd.Timestamp, cut: pd.Timestamp, pool: list) -> list:
+    b = min(until, cut)
+    if b <= at:
+        return []
+    rows = [q for q in pool if at < q[1] < b]
+    if pool and pool[-1][1] >= b:
+        return rows
+    return [q for q in fetch(client, sym, "quotes", _py(at), _py(b), cache_ok=b < cut) if q[1] > at]
 
 
 BUY_WAIT = timedelta(minutes=2)       # مدة صلاحية أمر الشراء المحدد
 
 
-def _buy_fill(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, limit: float) -> Optional[tuple]:
-    """أمر شراء محدد «قابل للتنفيذ»: يُنفَّذ بسعر العرض في أول عرض سعره ≤ الحد خلال دقيقتين.
+def _buy_fill(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, limit: Optional[float]) -> Optional[tuple]:
+    """أمر شراء محدد «قابل للتنفيذ»: يُنفَّذ بالعرض الساري إن كان ≤ الحد، وإلا بأول عرض ≤ الحد خلال دقيقتين.
     يحمي من عروض شاذة أو سبريد منفجر لحظياً (أمر سوق أعمى قد يُنفَّذ أعلى بكثير)."""
-    for q in pool:
-        if q[1] >= at and 0 < q[3] <= limit:
+    q = nbbo_at(client, sym, at, cut, pool, "ask")
+    if q is not None and (limit is None or q[3] <= limit):
+        return q
+    for q in _next_quotes(client, sym, at, at + BUY_WAIT, cut, pool):
+        if q[3] > 0 and (limit is None or q[3] <= limit):
             return q
-    b = min(at + BUY_WAIT, cut)
-    if b <= at:
-        return None
-    for q in fetch(client, sym, "quotes", _py(at), _py(b), cache_ok=b < cut):
-        if q[1] >= at and 0 < q[3] <= limit:
+    return None
+
+
+def _sell_fill(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list) -> Optional[tuple]:
+    """أمر بيع بسعر السوق: يُنفَّذ بالطلب الساري لحظة الوصول، وإلا بأول طلب بعدها."""
+    q = nbbo_at(client, sym, at, cut, pool, "bid")
+    if q is not None:
+        return q
+    for q in _next_quotes(client, sym, at, at + timedelta(minutes=10), cut, pool):
+        if q[2] > 0:
             return q
     return None
 
@@ -170,7 +194,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
         status = "OPEN"
         detail["entry_how"] = why
 
-    # 1) دخول A/BASE: أمر سوق بعد التنبيه بثانية
+    # 1) دخول A/BASE: أمر شراء محدد قابل للتنفيذ بعد التنبيه بثانية
     if status == "OPEN":
         at = created + LATENCY
         if at >= cut:
@@ -178,24 +202,22 @@ def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
         if at + BUY_WAIT > cut:
             return None                              # ننتظر حتى تكتمل نافذة أمر الشراء
         ref = float(t.get("entry") or 0) or None
-        if ref is None:
-            q = _quotes_after(client, sym, at, cut, [], "ask")
-        else:
-            limit = round(ref * (1 + max_spread_pct / 100), 4)
-            q = _buy_fill(client, sym, at, cut, [], limit)
-            if q is None:
-                if _quotes_after(client, sym, at, cut, [], "ask") is None:
-                    return None                      # لا عروض إطلاقاً (توقف؟) — نرجع لمحاكي الشموع
-                detail["limit"] = limit
-                return _out(t, "CANCELLED", None, None, None, None, at + BUY_WAIT,
-                            f"أمر الشراء المحدد ({I.fmt_price(limit)}) لم يتنفذ خلال دقيقتين — السعر هرب أو السبريد اتسع",
-                            sh, stop, detail)
+        limit = round(ref * (1 + max_spread_pct / 100), 4) if ref else None
+        q = _buy_fill(client, sym, at, cut, [], limit)
+        if q is None and limit is not None:
+            if _buy_fill(client, sym, at, cut, [], None) is None:
+                return None                          # لا عروض إطلاقاً (توقف؟) — نرجع لمحاكي الشموع
+            detail["limit"] = limit
+            return _out(t, "CANCELLED", None, None, None, None, at + BUY_WAIT,
+                        f"أمر الشراء المحدد ({I.fmt_price(limit)}) لم يتنفذ خلال دقيقتين — السعر هرب أو السبريد اتسع",
+                        sh, stop, detail)
+        if limit is not None:
             detail["limit"] = limit
         if q is None:
             return None
         if q[2] > 0:
             detail["entry_spread_pct"] = round((q[3] - q[2]) / q[3] * 100, 2)
-        arm(q[3], q[1], "أمر سوق بسعر العرض")
+        arm(q[3], q[1], "أمر شراء محدد تنفّذ بسعر العرض الساري" if limit else "أمر سوق بسعر العرض")
         if status == "CANCELLED":
             return _out(t, status, None, q[1], None, None, None, note, sh, stop, detail)
         pos = q[1]
@@ -241,7 +263,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
                 if e[2] >= t["trigger"]:
                     limit = round(float(t["trigger"]) * (1 + max_spread_pct / 100), 4)   # وقف-شراء بحد أعلى
                     detail["limit"] = limit
-                    q = _buy_fill(client, sym, e[1], cut, qs, limit)
+                    q = _buy_fill(client, sym, e[1] + ARRIVE, cut, qs, limit)
                     if q is None:
                         if e[1] + BUY_WAIT > cut:
                             return None
@@ -260,7 +282,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
                     continue
             else:  # OPEN
                 if e[0] == "T" and e[2] <= stop:
-                    q = _quotes_after(client, sym, e[1], cut, qs, "bid")
+                    q = _sell_fill(client, sym, e[1] + ARRIVE, cut, qs)
                     exit_px = q[2] if q is not None else round(e[2] * (1 - slip / 100), 4)
                     exit_at = q[1] if q is not None else e[1]
                     detail["stop_print"] = e[2]
@@ -277,7 +299,7 @@ def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
 
     if status in ("OPEN", "PENDING") and cut >= ex_t:
         if status == "OPEN":
-            q = _quotes_after(client, sym, ex_t, cut, [], "bid")
+            q = _sell_fill(client, sym, ex_t, cut, [])
             if q is not None:
                 exit_px, exit_at = q[2], q[1]
             else:
