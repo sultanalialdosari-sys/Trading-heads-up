@@ -66,6 +66,12 @@ def next_slot(et: datetime, phase: str) -> datetime:
     return base + timedelta(minutes=step)
 
 
+def trade_signature(store) -> tuple:
+    """بصمة حالة الصفقات: عددها، والمغلقة، والمفتوحة، ومجموع الربح المحقق. تغيّرها = صفقة فُتحت أو أُغلقت."""
+    r = store.one("SELECT COUNT(*) n, SUM(pnl IS NOT NULL) c, SUM(status='OPEN') o, ROUND(COALESCE(SUM(pnl),0),2) p FROM trades")
+    return (r["n"], r["c"], r["o"], r["p"]) if r else ()
+
+
 def main() -> int:
     t_start = time.monotonic()
     try:
@@ -139,12 +145,17 @@ def main() -> int:
             if ph in ("PRE", "REG", "POST"):
                 kind = {"PRE": "pre", "REG": "scan", "POST": "post"}[ph]
                 slot = et.replace(second=0, microsecond=0)
+                before = trade_signature(store)
                 info = Engine(client, store, cfg, sec, tg).run(kind, slot.astimezone(I.UTC), sweep_cache=sweep_cache)
+                trades_changed = trade_signature(store) != before
                 dirty = True
                 print(f"{et:%H:%M} ET {kind}: مرشحون {info.get('shortlist')} • مؤهلون {info.get('qualified')} • "
                       f"تنبيهات {info.get('alerts')} • طلبات {info.get('api_calls')} • {info.get('duration_sec')} ث"
                       + (f" • أخطاء: {info['errors'][:150]}" if info.get("errors") else ""))
-                if info.get("alerts") or time.monotonic() - last_pub >= PUBLISH_EVERY:
+                # النشر فوراً مع أي تنبيه أو أي صفقة تُفتح أو تُغلق (التقويم يتحدث مع كل صفقة)، وإلا كل 10 دقائق
+                if info.get("alerts") or trades_changed or time.monotonic() - last_pub >= PUBLISH_EVERY:
+                    if trades_changed:
+                        print("  تغيّرت الصفقات — نشر فوري")
                     publish()
             # النوم حتى الموعد التالي
             now = client.now_utc()

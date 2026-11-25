@@ -276,3 +276,37 @@ def test_site_shows_riyadh_time_and_ext_section(day):
     import re
     visible = re.sub(r"<script.*?</script>", "", html, flags=re.S)
     assert "نيويورك" not in visible
+
+
+def test_follow_records_last_price_and_calendar_shows_open():
+    """التقويم يتحدث مع كل صفقة: المفتوحة تظهر بربحها غير المحقق من آخر سعر تابعه النظام."""
+    tmp = tempfile.mkdtemp()
+    st = Store(os.path.join(tmp, "h.db"))
+    w = FakeWorld()
+    run_at(w, st, (12, 17))
+    run_at(w, st, (13, 17))
+    opn = st.q("SELECT * FROM trades WHERE status='OPEN'")
+    assert opn and all(t["last_px"] and t["last_utc"] for t in opn)
+    assert all(t["last_utc"] < w.now.astimezone(UTC).isoformat() for t in opn)        # لا سعر من بعد لحظة القطع
+    html = site.calendar_html(st.q("SELECT * FROM trades"))
+    assert "مفتوحة" in html and "live" in html
+
+
+def test_calendar_open_vs_closed_and_signature():
+    import loop
+    trades = [
+        {"day": "2026-11-25", "kind": "A", "status": "OPEN", "entry": 2.0, "last_px": 2.1, "shares": 500, "pnl": None},
+        {"day": "2026-11-25", "kind": "B", "status": "TARGET", "entry": 2.0, "shares": 500, "pnl": 60.0},
+        {"day": "2026-11-25", "kind": "BASE", "status": "PENDING", "entry": None, "shares": 500, "pnl": None},
+    ]
+    html = site.calendar_html(trades)
+    assert "+50$" in html and "1 مفتوحة" in html and "+60.00$" in html            # المفتوحة لا تدخل الصافي
+    assert "مفتوحة الآن 1" in html
+    tmp = tempfile.mkdtemp()
+    st = Store(os.path.join(tmp, "h.db"))
+    s0 = loop.trade_signature(st)
+    tid = st.insert("trades", {"day": "2026-11-25", "kind": "A", "symbol": "X", "status": "OPEN", "entry": 1.0, "stop": 0.9})
+    s1 = loop.trade_signature(st)
+    st.update("trades", tid, status="STOP", pnl=-50.0)
+    s2 = loop.trade_signature(st)
+    assert s0 != s1 != s2

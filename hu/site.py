@@ -54,12 +54,20 @@ AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو",
 
 
 def calendar_html(trades: List[dict]) -> str:
-    """تقويم يومي: مجموع الربح ومجموع الخسارة وصافي كل يوم من كل الصفقات الافتراضية المغلقة (كل الأنواع)."""
+    """تقويم يومي يتحدث مع كل صفقة: مجموع الربح ومجموع الخسارة وصافي الصفقات المغلقة، وسطر مستقل للصفقات
+    المفتوحة بربحها/خسارتها غير المحققة (من آخر سعر تابعه النظام). المفتوحة لا تدخل في الصافي حتى تُغلق."""
     import calendar as _cal
     from collections import defaultdict
-    days = defaultdict(lambda: {"win": 0.0, "loss": 0.0, "nw": 0, "nl": 0, "kinds": defaultdict(float)})
+    days = defaultdict(lambda: {"win": 0.0, "loss": 0.0, "nw": 0, "nl": 0, "kinds": defaultdict(float),
+                                "no": 0, "upnl": 0.0, "up_n": 0})
     for t in trades:
         if t.get("pnl") is None:
+            if t.get("status") == "OPEN" and t.get("entry"):
+                d = days[t["day"]]
+                d["no"] += 1
+                if t.get("last_px"):
+                    d["upnl"] += (t["last_px"] - t["entry"]) * (t.get("shares") or 0)
+                    d["up_n"] += 1
             continue
         d = days[t["day"]]
         if t["pnl"] > 0:
@@ -68,7 +76,7 @@ def calendar_html(trades: List[dict]) -> str:
             d["loss"] += t["pnl"]; d["nl"] += 1
         d["kinds"][t["kind"]] += t["pnl"]
     if not days:
-        return "<div class='muted' style='padding:14px'>لا صفقات مغلقة بعد.</div>"
+        return "<div class='muted' style='padding:14px'>لا صفقات بعد.</div>"
     months = sorted({k[:7] for k in days}, reverse=True)
     wd = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"]
     names = {"A": "A", "B": "B", "BASE": "مقارنة", "PRE": "قبل الافتتاح", "POST": "بعد الإغلاق"}
@@ -92,17 +100,27 @@ def calendar_html(trades: List[dict]) -> str:
                     continue
                 net = v["win"] + v["loss"]
                 tip = " • ".join(f"{names.get(k, k)} {money(x)}" for k, x in v["kinds"].items())
-                cells += (f"<div class='cd has {'pos' if net > 0 else 'neg' if net < 0 else ''}' title='{E(tip)}'>"
+                if v["no"]:
+                    tip += (" • " if tip else "") + f"مفتوحة {v['no']}" + (f": غير محقق {money(v['upnl'])}" if v["up_n"] else "")
+                closed = v["nw"] + v["nl"]
+                opn = (f"<span class='co'><bdi dir='ltr' class='mono'>{'+' if v['upnl'] > 0 else ''}{v['upnl']:,.0f}$</bdi>"
+                       f"<i> · {v['no']} مفتوحة</i></span>") if v["no"] else ""
+                cells += (f"<div class='cd has {'pos' if net > 0 else 'neg' if net < 0 else ''}{' live' if v['no'] else ''}' title='{E(tip)}'>"
                           f"<span class='dn'>{dnum}</span>"
-                          f"<span class='cw'><bdi dir='ltr' class='mono'>+{v['win']:,.0f}$</bdi><i> · {v['nw']} رابحة</i></span>"
-                          f"<span class='cl'><bdi dir='ltr' class='mono'>{v['loss']:,.0f}$</bdi><i> · {v['nl']} خاسرة</i></span>"
-                          f"<b class='cn'><bdi dir='ltr' class='mono' style='color:{col(net)}'>{'+' if net > 0 else ''}{net:,.2f}$</bdi></b></div>")
+                          + (f"<span class='cw'><bdi dir='ltr' class='mono'>+{v['win']:,.0f}$</bdi><i> · {v['nw']} رابحة</i></span>"
+                             f"<span class='cl'><bdi dir='ltr' class='mono'>{v['loss']:,.0f}$</bdi><i> · {v['nl']} خاسرة</i></span>" if closed else "")
+                          + opn
+                          + (f"<b class='cn'><bdi dir='ltr' class='mono' style='color:{col(net)}'>{'+' if net > 0 else ''}{net:,.2f}$</bdi></b>" if closed else "")
+                          + "</div>")
         out.append(f"<div class='calm' data-i='{mi}'{'' if mi == 0 else ' hidden'}>"
                    f"<div class='calh'><button type='button' class='calp' {'disabled' if mi == len(months) - 1 else ''}>‹ السابق</button>"
                    f"<b>{AR_MONTHS[m - 1]} {y}</b>"
                    f"<button type='button' class='caln' {'disabled' if mi == 0 else ''}>التالي ›</button></div>"
                    f"<div class='calsum'>ربح الشهر <bdi dir='ltr' class='mono' style='color:{GREEN}'>+{mw:,.2f}$</bdi> • خسارة الشهر "
-                   f"<bdi dir='ltr' class='mono' style='color:{RED}'>{ml:,.2f}$</bdi> • الصافي <bdi dir='ltr' class='mono' style='color:{col(mw + ml)}'>{'+' if mw + ml > 0 else ''}{mw + ml:,.2f}$</bdi></div>"
+                   f"<bdi dir='ltr' class='mono' style='color:{RED}'>{ml:,.2f}$</bdi> • الصافي <bdi dir='ltr' class='mono' style='color:{col(mw + ml)}'>{'+' if mw + ml > 0 else ''}{mw + ml:,.2f}$</bdi>"
+                   + (lambda no, up: f" • مفتوحة الآن {no} <bdi dir='ltr' class='mono' style='color:#d97706'>{'+' if up > 0 else ''}{up:,.2f}$</bdi> غير محقق" if no else "")(
+                       sum(v["no"] for v in tot), sum(v["upnl"] for v in tot))
+                   + "</div>"
                    f"<div class='calg'>{''.join(f'<div class=cwd>{w}</div>' for w in wd)}{cells}</div></div>")
     return "".join(out)
 
@@ -701,7 +719,10 @@ bdi.mono{direction:ltr;unicode-bidi:isolate}.cd .cw,.cd .cl{white-space:nowrap}
 .cd.empty{border:0;background:none}.cd .dn{font-size:12px;color:var(--mut)}.cd i{font-style:normal;color:var(--mut);font-size:11px}
 .cd .cw{color:var(--g);font-size:12.5px}.cd .cl{color:var(--r);font-size:12.5px}.cd bdi{direction:ltr;unicode-bidi:isolate}
 .cd .cn{font-size:14px;margin-top:auto}.cd.pos{border-color:var(--g)}.cd.neg{border-color:var(--r)}
-@media(max-width:640px){.cd{min-height:64px;padding:4px}.cd .cw,.cd .cl{font-size:10.5px}.cd i{display:none}.cd .cn{font-size:11.5px}}
+.cd .co{color:#d97706;font-size:12.5px;white-space:nowrap}.cd.live{box-shadow:inset 0 0 0 1px #d97706}
+.cd.live .dn::after{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:#d97706;margin-inline-start:5px;vertical-align:middle;animation:pulse 1.6s infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media(max-width:640px){.cd{min-height:64px;padding:4px}.cd .cw,.cd .cl,.cd .co{font-size:10.5px}.cd i{display:none}.cd .cn{font-size:11.5px}}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card);margin-top:8px}
 table{border-collapse:collapse;width:100%;min-width:900px}
 th,td{padding:9px 11px;border-bottom:1px solid var(--l2);text-align:right;vertical-align:top;font-size:13px}

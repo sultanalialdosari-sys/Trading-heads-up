@@ -395,8 +395,15 @@ class Engine:
                 self.chart_save(day, s, bars.get(s), "follow")
         for t in trades:
             r = TR.simulate(t, bars.get(t["symbol"]), cut, self.cfg["slippage_pct"], self.cfg["target_r"])
-            self.db.update("trades", t["id"], **{k: v for k, v in r.items() if k in
-                                                 ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct")})
+            upd = {k: v for k, v in r.items() if k in
+                   ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct")}
+            b = bars.get(t["symbol"])
+            if b is not None and len(b):
+                seen = b[b.index < pd.Timestamp(cut)]
+                if len(seen):                                   # آخر سعر حتى لحظة القطع (للربح غير المحقق في التقويم)
+                    upd["last_px"] = float(seen["close"].iloc[-1])
+                    upd["last_utc"] = seen.index[-1].isoformat()
+            self.db.update("trades", t["id"], **upd)
         for a in alerts:
             ev = TR.alert_events(a, bars.get(a["symbol"]), cut)
             if not ev:

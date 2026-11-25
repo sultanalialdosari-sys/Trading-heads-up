@@ -52,6 +52,10 @@ class Store:
             self.db.execute("ALTER TABLE runs ADD COLUMN timing TEXT")
         if "config_hash" not in cols:
             self.db.execute("ALTER TABLE runs ADD COLUMN config_hash TEXT")
+        tcols = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
+        for c, typ in (("last_px", "REAL"), ("last_utc", "TEXT")):   # آخر سعر تابعه النظام (للربح غير المحقق)
+            if c not in tcols:
+                self.db.execute(f"ALTER TABLE trades ADD COLUMN {c} {typ}")
 
     def q(self, sql: str, args=()) -> list:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]
