@@ -1,0 +1,36 @@
+name: ticks-probe
+# فحص يدوي: هل تسمح الخطة المجانية بصفقات وعروض SIP التاريخية (أقدم من 15 دقيقة)؟ لا يحفظ شيئاً.
+on:
+  workflow_dispatch:
+    inputs:
+      symbol: { description: "السهم", default: "SOUN" }
+      minutes_ago: { description: "بداية النافذة قبل كم دقيقة", default: "60" }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q requests pandas numpy
+      - run: |
+          python - <<'PY'
+          import sys; sys.path.insert(0, ".")
+          from datetime import timedelta
+          import intraday as I
+          k, s = I.load_keys(); c = I.AlpacaClient(k, s)
+          sym = "${{ inputs.symbol }}"; now = c.now_utc()
+          a = now - timedelta(minutes=int("${{ inputs.minutes_ago }}")); b = a + timedelta(minutes=2)
+          for kind in ("trades", "quotes"):
+              try:
+                  d = c._get(I.DATA_BASE, f"/v2/stocks/{sym}/{kind}", {"start": I.iso(a), "end": I.iso(b), "feed": "sip", "limit": 10000})
+                  rows = d.get(kind) or []
+                  print(kind, "OK rows:", len(rows), "next:", bool(d.get("next_page_token")))
+                  for r in rows[:3]: print("  ", r)
+              except Exception as e:
+                  print(kind, "FAIL:", e)
+          PY
