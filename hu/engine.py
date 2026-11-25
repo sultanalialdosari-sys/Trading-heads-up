@@ -17,6 +17,7 @@ import pandas as pd
 import intraday as I
 from hu import charts as CH
 from hu import config as C
+from hu import halts as HL
 from hu import extended as X
 from hu import news as N
 from hu import rules as RL
@@ -202,6 +203,9 @@ class Engine:
                 info["universe"] = (sweep_cache or {}).get("universe") or SWEEP_EXTRA.get("universe", 0)
             except I.ApiError as e:
                 self.errors.append("sweep: " + e.message)
+        self.halted: Dict[str, HL.Halt] = {}
+        if info["market_open"] or kind in ("pre", "post", "final"):
+            self.load_halts(now, day)
         if info["market_open"] and kind == "scan" and not snap_df.empty:
             self.scan(now, day, snap_df, info)
         if kind in ("pre", "post") and not snap_df.empty:
@@ -291,6 +295,9 @@ class Engine:
             RL.apply_sec(st, si)
             RL.apply_news(st, N.summarize(I.news_for_symbol(raw_news, st.symbol), si.recent_8k_days))
         for st in setups:
+            h = self.halted.get(st.symbol)
+            if h:                                   # موقوف الآن (المصدر الرسمي): لا يمكن الدخول
+                st.gates_failed.append(f"موقوف الآن: {h.reason_ar} ({h.reason}) منذ {h.halt_time or '—'} نيويورك — المصدر Nasdaq")
             ratio = cache.vol_ratio.get(st.symbol)
             RL.finalize(st, (1 / ratio) if ratio else None, cache.sip_ok)
         run_id = self.run_id
@@ -421,6 +428,31 @@ class Engine:
                               f"الساعة {et_str(ev['at'])} الرياض قبل أن يخترق.")
             elif ev["state"] == "EXPIRED":
                 self.db.update("alerts", a["id"], state="EXPIRED")
+
+    def load_halts(self, now: datetime, day: str) -> None:
+        """توقفات اليوم الرسمية: تُحفظ، وتمنع تنبيه سهم موقوف، وتُرسل تنبيه توقف لأي سهم نتابعه (مرة لكل توقف)."""
+        try:
+            halts = HL.fetch(getattr(self.sec, "s", None))
+        except Exception as e:                      # التوقفات إضافة: لا توقف الفحص
+            self.errors.append(f"halts: {type(e).__name__}: {e}"[:160])
+            return
+        seen = now.isoformat()
+        for h in halts:
+            self.db.db.execute(
+                "INSERT OR REPLACE INTO halts(day,symbol,name,market,reason,halt_date,halt_time,pause_price,resume_date,"
+                "resume_quote,resume_trade,seen_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (h.halt_date or day, h.symbol, h.name, h.market, h.reason, h.halt_date, h.halt_time or "",
+                 h.pause_price, h.resume_date, h.resume_quote, h.resume_trade, seen))
+        self.halted = HL.active_map(halts, now.astimezone(HL.NY))
+        mine = {r["symbol"] for r in self.db.q("SELECT symbol FROM alerts WHERE day=?", (day,))}
+        mine |= {r["symbol"] for r in self.db.q("SELECT symbol FROM trades WHERE day=? AND kind!='BASE' AND status IN ('OPEN','PENDING')", (day,))}
+        for sym, h in self.halted.items():
+            if sym in mine and self.db.once(f"halt:{day}:{sym}:{h.halt_time}", day, seen):
+                self.send(f"⏸️ توقف تداول — {sym}: {h.reason_ar} ({h.reason})\n"
+                          f"منذ {et_str(h.halted_at().isoformat()) if h.halted_at() else '—'} الرياض"
+                          + (f" • سعر الإيقاف {I.fmt_price(h.pause_price)}" if h.pause_price else "")
+                          + (f"\nالاستئناف المعلن: {h.resume_trade} نيويورك" if h.resume_trade else "\nلم يُعلن وقت الاستئناف بعد")
+                          + f"\nأثناء التوقف لا يمكن البيع ولا الشراء. المصدر: {HL.SOURCE}.")
 
     def chart_save(self, day: str, symbol: str, df, source: str) -> None:
         try:

@@ -98,8 +98,9 @@ def build():
 
 
 class Resp:
-    def __init__(self, code, js):
-        self.status_code, self._js, self.headers, self.text = code, js, {}, json.dumps(js)[:200]
+    def __init__(self, code, js, text=None):
+        self.status_code, self._js, self.headers = code, js, {}
+        self.text = text if text is not None else json.dumps(js)[:200]
 
     def json(self):
         return self._js
@@ -119,6 +120,7 @@ class FakeWorld:
         self.headers = {}
         self.calls = []
         self.tg = []
+        self.halts = []          # [(symbol, reason, halt_et "HH:MM:SS", resume_et أو "")] — خلاصة Nasdaq المزيفة
         self.cik = {"EARL": 1001, "DILU": 1002, "RUNR": 1003, "JUMP": 1004, "FLAT": 1005, "PREM": 1006, "AFTR": 1007}
 
     # ---- Alpaca
@@ -140,7 +142,7 @@ class FakeWorld:
         return df.resample(rule, label="left", closed="left").agg(
             {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, headers=None, **kw):
         params = dict(params or {})
         self.calls.append((url, params.get("feed")))
         if "api.telegram.org" in url:
@@ -148,6 +150,17 @@ class FakeWorld:
             return Resp(200, {"ok": True, "result": {}})
         if "sec.gov" in url:
             return self.sec(url)
+        if "nasdaqtrader.com" in url:
+            d = datetime.fromisoformat(TODAY).strftime("%m/%d/%Y")
+            items = "".join(
+                f"<item><title>{s}</title><ndaq:HaltDate>{d}</ndaq:HaltDate><ndaq:HaltTime>{ht}</ndaq:HaltTime>"
+                f"<ndaq:IssueSymbol>{s}</ndaq:IssueSymbol><ndaq:IssueName>{s} Corp</ndaq:IssueName><ndaq:Market>NASDAQ</ndaq:Market>"
+                f"<ndaq:ReasonCode>{rc}</ndaq:ReasonCode><ndaq:PauseThresholdPrice>2.10</ndaq:PauseThresholdPrice>"
+                f"<ndaq:ResumptionDate>{d if rt else ''}</ndaq:ResumptionDate><ndaq:ResumptionQuoteTime></ndaq:ResumptionQuoteTime>"
+                f"<ndaq:ResumptionTradeTime>{rt}</ndaq:ResumptionTradeTime></item>" for s, rc, ht, rt in self.halts)
+            xml = ('<?xml version="1.0"?><rss version="2.0" xmlns:ndaq="http://www.nasdaqtrader.com/"><channel>'
+                   f"<title>NASDAQTrader.com</title>{items}</channel></rss>")
+            return Resp(200, None, xml)
         if url.endswith("/v2/clock"):
             open_ = et(TODAY, 9, 30) <= self.now < et(TODAY, 16, 0)
             nxt = et(TODAY, 9, 30) if self.now < et(TODAY, 9, 30) else et("2026-11-23", 9, 30)

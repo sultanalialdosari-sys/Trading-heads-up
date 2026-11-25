@@ -310,3 +310,50 @@ def test_calendar_open_vs_closed_and_signature():
     st.update("trades", tid, status="STOP", pnl=-50.0)
     s2 = loop.trade_signature(st)
     assert s0 != s1 != s2
+
+
+def test_halts_parse_real_shape():
+    from hu import halts as HL
+    xml = ('<?xml version="1.0"?><rss xmlns:ndaq="http://www.nasdaqtrader.com/"><channel><item><title>ABCD</title>'
+           '<ndaq:HaltDate>11/25/2026</ndaq:HaltDate><ndaq:HaltTime>10:31:05.120</ndaq:HaltTime><ndaq:IssueSymbol>ABCD</ndaq:IssueSymbol>'
+           '<ndaq:IssueName>Abcd Inc</ndaq:IssueName><ndaq:Market>NASDAQ</ndaq:Market><ndaq:ReasonCode>LUDP</ndaq:ReasonCode>'
+           '<ndaq:PauseThresholdPrice>1.2345</ndaq:PauseThresholdPrice><ndaq:ResumptionDate>11/25/2026</ndaq:ResumptionDate>'
+           '<ndaq:ResumptionQuoteTime>10:31:05</ndaq:ResumptionQuoteTime><ndaq:ResumptionTradeTime>10:36:05</ndaq:ResumptionTradeTime>'
+           '</item><item><ndaq:HaltDate>11/25/2026</ndaq:HaltDate><ndaq:HaltTime>11:00:00</ndaq:HaltTime>'
+           '<ndaq:IssueSymbol>NEWS</ndaq:IssueSymbol><ndaq:ReasonCode>T1</ndaq:ReasonCode><ndaq:ResumptionTradeTime></ndaq:ResumptionTradeTime>'
+           '</item></channel></rss>')
+    h = HL.parse(xml)
+    assert [x.symbol for x in h] == ["ABCD", "NEWS"]
+    a, n = h
+    assert (a.reason, a.halt_date, a.halt_time, a.pause_price, a.resume_trade) == ("LUDP", "2026-11-25", "10:31:05", 1.2345, "10:36:05")
+    assert a.volatility and "LULD" in a.reason_ar and n.reason_ar == "بانتظار خبر"
+    ny = HL.NY
+    assert a.active(datetime(2026, 11, 25, 10, 33, tzinfo=ny)) and not a.active(datetime(2026, 11, 25, 10, 37, tzinfo=ny))
+    assert not a.active(datetime(2026, 11, 25, 10, 30, tzinfo=ny))                   # قبل التوقف
+    assert n.active(datetime(2026, 11, 25, 15, 0, tzinfo=ny))                          # بلا وقت استئناف = ما زال موقوفاً
+    assert HL.parse("not xml") == []
+
+
+def test_halted_stock_gets_no_alert_and_followed_stock_gets_halt_message():
+    tmp = tempfile.mkdtemp()
+    st = Store(os.path.join(tmp, "h.db"))
+    w = FakeWorld()
+    w.halts = [("EARL", "LUDP", "12:10:00", "")]                       # موقوف وقت فحص 12:17
+    run_at(w, st, (12, 17))
+    assert st.one("SELECT * FROM alerts WHERE symbol='EARL'") is None
+    c = [json.loads(r["data"]) for r in st.q("SELECT data FROM candidates WHERE symbol='EARL'")]
+    assert c and any("موقوف الآن" in g for g in c[-1].get("gates_failed", []))
+    assert st.one("SELECT * FROM halts WHERE symbol='EARL'")["reason"] == "LUDP"
+    # سهم عليه تنبيه ثم أُوقف: رسالة واحدة فقط
+    st2 = Store(os.path.join(tmp, "h2.db"))
+    w2 = FakeWorld()
+    run_at(w2, st2, (12, 17))
+    assert st2.one("SELECT * FROM alerts WHERE symbol='EARL'")
+    w2.halts = [("EARL", "T1", "13:00:00", "")]
+    w2._hu_halts = None       # الحارس «طلب في الدقيقة» يعمل بالوقت الحقيقي؛ الاختبار يقفز ساعة في جزء من الثانية
+    _, msgs = run_at(w2, st2, (13, 17))
+    w2._hu_halts = None
+    _, msgs2 = run_at(w2, st2, (13, 22))
+    assert sum(m.startswith("⏸️ توقف تداول — EARL") for m in msgs) == 1, [x[:60] for x in msgs]
+    assert not any(m.startswith("⏸️") for m in msgs2)
+    assert any("بانتظار خبر" in m and "Nasdaq" in m for m in msgs)

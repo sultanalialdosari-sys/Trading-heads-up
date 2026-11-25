@@ -13,6 +13,7 @@ from typing import List, Optional
 import intraday as I
 from hu import charts as CH
 from hu import equity as EQ
+from hu import halts as HL
 from hu import rules as RL
 from hu import trades as TR
 
@@ -371,6 +372,44 @@ def PX(cfg: dict) -> str:
     return f"{cfg.get('max_price', 5):g}$"
 
 
+def halts_html(store, cfg: dict, alerts: List[dict], trades: List[dict]) -> str:
+    """توقفات اليوم الرسمية كما جاءت من Nasdaq (بلا تعديل)، مع تمييز الأسهم التي نتابعها."""
+    try:
+        last = store.one("SELECT MAX(day) d FROM halts")
+    except Exception:
+        return "<div class='empty'>لا بيانات توقفات بعد.</div>"
+    day = last and last["d"]
+    if not day:
+        return "<div class='empty'>لا بيانات توقفات بعد — تظهر من أول فحص بعد هذا التحديث.</div>"
+    rows = store.q("SELECT * FROM halts WHERE day=? ORDER BY halt_time DESC", (day,))
+    mine = {a["symbol"] for a in alerts if a["day"] == day} | {t["symbol"] for t in trades if t["day"] == day and t["kind"] != "BASE"}
+    cap = cfg.get("max_price", 5) * 1.5
+    now = datetime.now(HL.NY)
+    body, hidden = [], 0
+    for r in rows:
+        h = HL.Halt(r["symbol"], r["name"] or "", r["market"] or "", r["reason"] or "", r["halt_date"], r["halt_time"] or None,
+                    r["pause_price"], r["resume_date"], r["resume_quote"], r["resume_trade"])
+        if h.pause_price and h.pause_price > cap and h.symbol not in mine:
+            hidden += 1
+            continue
+        ha, ra = h.halted_at(), h.resumes_at()
+        act = h.active(now)
+        star = "★ " if h.symbol in mine else ""
+        body.append([
+            f"<span class='mono'>{ha.astimezone(I.RIYADH).strftime('%H:%M:%S') if ha else '—'}</span>",
+            f"<b class='mono'>{star}{E(h.symbol)}</b><div class='muted' style='font-size:12px'>{E(h.name[:40])}</div>",
+            f"{E(h.reason_ar)} <span class='muted mono'>({E(h.reason)})</span>",
+            "—" if not h.pause_price else f"<span class='mono'>{I.fmt_price(h.pause_price)}</span>",
+            "—" if not ra else f"<span class='mono'>{ra.astimezone(I.RIYADH).strftime('%H:%M:%S')}</span>",
+            f"<b style='color:{RED if act else GREEN}'>{'موقوف الآن' if act else 'استؤنف'}</b>",
+        ])
+    note = (f"<div class='muted'>يوم {E(day)} • {len(body)} توقفاً" + (f" (أُخفي {hidden} لأسهم سعر إيقافها فوق {cap:g}$)" if hidden else "")
+            + " • ★ = سهم عليه تنبيه أو صفقة اليوم • الأوقات بتوقيت الرياض • المصدر: "
+              "<a href='https://www.nasdaqtrader.com/trader.aspx?id=TradeHalts' target='_blank' rel='noopener'>Nasdaq Trader</a> "
+              "(كما نُشر بلا تعديل)</div>")
+    return note + table(["وقت التوقف", "السهم", "السبب", "سعر الإيقاف", "الاستئناف المعلن", "الحالة"], body)
+
+
 def build(store, out_path: str, cfg: dict) -> None:
     runs = store.q("SELECT * FROM runs ORDER BY id DESC LIMIT 60")
     last_scan = store.one("SELECT * FROM runs WHERE id IN (SELECT DISTINCT run_id FROM candidates) ORDER BY id DESC LIMIT 1")
@@ -528,7 +567,7 @@ def build(store, out_path: str, cfg: dict) -> None:
   <div class="muted">آخر تحديث: {E(upd_txt)}</div>
   <div class="new" id="newv" hidden>وصل تحديث جديد — <a href="#" id="reload2">اعرضه</a></div>
 </div>
-<div id="tabs-top"></div><nav id="tabs" role="tablist"><a href="#overview">نظرة عامة</a><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#charts">الرسوم البيانية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
+<div id="tabs-top"></div><nav id="tabs" role="tablist"><a href="#overview">نظرة عامة</a><a href="#cands">المرشحون الآن</a><a href="#alerts">سجل التنبيهات</a><a href="#ext">قبل الافتتاح وبعد الإغلاق</a><a href="#trades">الصفقات الافتراضية</a><a href="#charts">الرسوم البيانية</a><a href="#cal">تقويم الربح والخسارة</a><a href="#halts">التوقفات</a><a href="#missed">فاتت</a><a href="#runs">التشغيلات</a></nav>
 <section id="overview">
 <div class="card"><div class="ch"><span class="lab">الربح الافتراضي — {cfg['shares_per_trade']} سهم لكل صفقة</span>
 <span class="lg"><i class="la"></i>A عند التنبيه <i class="lb2"></i>B عند الاختراق <i class="lc"></i>المقارنة</span></div>
@@ -562,6 +601,7 @@ Float غير متوفر مجاناً. التنبيهات ليست توصية ش�
 """ + CH.section_html(CH.build_items(store, alerts, trades)) + f"""
 <section id="cal"><h2>تقويم الربح والخسارة اليومي</h2><div class="muted">لكل يوم: مجموع ربح الصفقات الرابحة (وعددها)، ومجموع خسارة الخاسرة (وعددها)، والصافي — من كل الصفقات الافتراضية المغلقة بكل أنواعها. مرّر المؤشر على اليوم لترى التوزيع حسب النوع. افتراضي فقط.</div>
 <div class="card">{calendar_html(trades)}</div></section>
+<section id="halts"><h2>توقفات التداول اليوم</h2><div class="muted">إيقافات LULD وبانتظار الخبر وغيرها. أثناء التوقف لا يمكن البيع ولا الشراء، والنظام لا يرسل تنبيهاً لسهم موقوف.</div>{halts_html(store, cfg, alerts, trades)}</section>
 <section id="missed"><h2>فاتت: ارتفعت 30%+ بلا تنبيه</h2><div class="muted">لا نخفي ما فات: كل سهم تحت {PX(cfg)} ارتفع 30%+ اليوم بلا تنبيه، ولماذا.</div>{missed_html}</section>
 <section id="runs"><h2>التشغيلات</h2><div class="muted">التأخر = الفرق بين موعد الجدولة ووقت البدء الفعلي على GitHub.</div>{runs_html}</section>
 <footer class="muted">صفقات افتراضية فقط — لا يُرسل أي أمر تداول.</footer>
