@@ -438,10 +438,10 @@ class Engine:
             return
         seen = now.isoformat()
         for h in halts:
-            self.db.db.execute(
+            self.db.db.execute(                          # day = يوم الرؤية (اليوم)؛ تاريخ بدء التوقف في halt_date
                 "INSERT OR REPLACE INTO halts(day,symbol,name,market,reason,halt_date,halt_time,pause_price,resume_date,"
                 "resume_quote,resume_trade,seen_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (day, h.symbol, h.name,                    # يوم الرؤية (اليوم)، وتاريخ بدء التوقف في halt_date h.market, h.reason, h.halt_date, h.halt_time or "",
+                (day, h.symbol, h.name, h.market, h.reason, h.halt_date, h.halt_time or "",
                  h.pause_price, h.resume_date, h.resume_quote, h.resume_trade, seen))
         self.halted = HL.active_map(halts, now.astimezone(HL.NY))
         mine = {r["symbol"] for r in self.db.q("SELECT symbol FROM alerts WHERE day=?", (day,))}
