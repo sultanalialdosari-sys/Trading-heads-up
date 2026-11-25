@@ -127,19 +127,37 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].split(":")[-1].lower()
 
 
-def parse(xml_text: str) -> List[Halt]:
-    """يقرأ عناصر <item> بأسمائها المحلية (haltdate، halttime، issuesymbol، ...)."""
+_ITEM = re.compile(r"<item[\s>](.*?)</item>", re.S | re.I)
+_FIELD = re.compile(r"<(?:[\w.-]+:)?([\w.-]+)\s*(?:/>|>(.*?)</(?:[\w.-]+:)?\1\s*>)", re.S)
+
+
+def _items(xml_text: str) -> List[Dict[str, str]]:
+    """عناصر <item> كقواميس {الاسم المحلي بأحرف صغيرة: النص}. الخلاصة الفعلية تستخدم البادئة ndaq: وقد لا
+    تعرّفها، فيرفضها قارئ XML القياسي — عندها نقرأ العناصر مباشرة بتعبير منتظم."""
     try:
         root = ET_XML.fromstring(xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text)
+        out = []
+        for it in root.iter():
+            if _local(it.tag) == "item":
+                out.append({_local(ch.tag): (ch.text or "").strip() for ch in it})
+        return out
     except ET_XML.ParseError:
-        return []
+        pass
     out = []
-    for it in root.iter():
-        if _local(it.tag) != "item":
-            continue
+    for body in _ITEM.findall(xml_text or ""):
         f: Dict[str, str] = {}
-        for ch in it:
-            f[_local(ch.tag)] = (ch.text or "").strip()
+        for name, val in _FIELD.findall(body):
+            k = name.lower()
+            if k not in f:
+                f[k] = re.sub(r"^<!\[CDATA\[|\]\]>$", "", (val or "").strip())
+        out.append(f)
+    return out
+
+
+def parse(xml_text: str) -> List[Halt]:
+    """يقرأ عناصر <item> بأسمائها المحلية (haltdate، halttime، issuesymbol، mkt، ...)."""
+    out = []
+    for f in _items(xml_text):
         sym = (f.get("issuesymbol") or f.get("symbol") or "").upper()
         if not sym:
             m = re.search(r"\b([A-Z]{1,5})\b", f.get("title", ""))

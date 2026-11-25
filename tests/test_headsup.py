@@ -357,3 +357,22 @@ def test_halted_stock_gets_no_alert_and_followed_stock_gets_halt_message():
     assert sum(m.startswith("⏸️ توقف تداول — EARL") for m in msgs) == 1, [x[:60] for x in msgs]
     assert not any(m.startswith("⏸️") for m in msgs2)
     assert any("بانتظار خبر" in m and "Nasdaq" in m for m in msgs)
+
+
+def test_halts_parse_live_feed_sample_with_undeclared_prefix():
+    """العنصر كما جاء فعلاً من الخلاصة (25 نوفمبر 2026): البادئة ndaq غير معرّفة، ووقت فيه مسافات قبل الأجزاء."""
+    from hu import halts as HL
+    item = ('<item>\n      <title>FHIL</title>\n      <pubDate>Tue, 24 Nov 2026 05:00:00 GMT</pubDate>\n'
+            '      <ndaq:IssueSymbol>FHIL</ndaq:IssueSymbol>\n      <ndaq:IssueName>Federated Hermes International Leaders ETF</ndaq:IssueName>\n'
+            '      <ndaq:Mkt>Z</ndaq:Mkt>\n      <ndaq:ReasonCode>M</ndaq:ReasonCode>\n      <ndaq:PauseThresholdPrice />\n'
+            '      <ndaq:HaltDate>11/24/2026</ndaq:HaltDate>\n      <ndaq:HaltTime>09:31:02                      .553</ndaq:HaltTime>\n'
+            '      <ndaq:ResumptionDate>11/24/2026</ndaq:ResumptionDate>\n      <ndaq:ResumptionQuoteTime>09:36:02</ndaq:ResumptionQuoteTime>\n'
+            '      <ndaq:ResumptionTradeTime>09:36:02</ndaq:ResumptionTradeTime>\n'
+            '      <description><![CDATA[<table><tr><td>FHIL</td></tr></table>]]></description>\n    </item>')
+    xml = f'<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>x</title>{item}{item.replace("FHIL", "ABCD")}</channel></rss>'
+    h = HL.parse(xml)
+    assert [x.symbol for x in h] == ["FHIL", "ABCD"]
+    a = h[0]
+    assert (a.market, a.reason, a.halt_date, a.halt_time, a.pause_price, a.resume_trade) == \
+        ("Z", "M", "2026-11-24", "09:31:02", None, "09:36:02")
+    assert a.name.startswith("Federated") and a.reason_ar == "إيقاف تقلب"
