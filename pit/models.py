@@ -47,7 +47,9 @@ class Asset:
         """ما يُرى عند as_of: الحالة الحالية وتاريخ الشطب معلومات من المستقبل."""
         d = as_of.astimezone(ET).date()
         last = self.last_bar if self.last_bar is not None and self.last_bar < d else None
-        return replace(self, status="active", last_bar=last)
+        # البورصة الحالية OTC تعني غالباً أنه شُطب لاحقاً؛ شموعه من SIP أي كان مدرجاً وقتها
+        exch = "LISTED" if self.exchange == "OTC" else self.exchange
+        return replace(self, status="active", last_bar=last, exchange=exch)
 
 
 @dataclass(frozen=True)

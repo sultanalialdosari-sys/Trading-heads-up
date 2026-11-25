@@ -31,6 +31,9 @@ from pit.models import ET  # noqa: E402
 from pit.store import DAILY_COLS, derive_splits  # noqa: E402
 
 EXCH = {"NASDAQ", "NYSE", "AMEX", "ARCA", "BATS"}
+# OTC الآن: كثير من الأسهم المشطوبة من NASDAQ/NYSE تنتقل إلى OTC وتظهر بهذه البورصة اليوم.
+# شموع SIP لا تغطي OTC، فما نجده لها هو فترة إدراجها فقط — وهي بالضبط الأسهم الفاشلة التي يجب ألا نفقدها.
+EXCH_WITH_OTC = EXCH | {"OTC"}
 CHUNK = 100
 
 
@@ -47,11 +50,11 @@ def sha256(path: str) -> str:
 
 
 # ====================================================================== 1) الأصول
-def assets_frame(raw_assets: list) -> pd.DataFrame:
-    rows = []
+def assets_frame(raw_assets: list, include_otc: bool = True) -> pd.DataFrame:
+    rows, ok = [], EXCH_WITH_OTC if include_otc else EXCH
     for a in raw_assets:
         s = a.get("symbol") or ""
-        if a.get("exchange") in EXCH and s.isalpha() and len(s) <= 5:
+        if a.get("exchange") in ok and s.isalpha() and len(s) <= 5:
             rows.append({"asset_id": a.get("id"), "symbol": s, "name": a.get("name") or "",
                          "exchange": a.get("exchange"), "status": a.get("status") or "inactive"})
     df = pd.DataFrame(rows, columns=["asset_id", "symbol", "name", "exchange", "status"]).drop_duplicates("asset_id")
@@ -59,13 +62,17 @@ def assets_frame(raw_assets: list) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def fetch_assets(c) -> pd.DataFrame:
+def fetch_assets(c, include_otc: bool = True):
     allr = []
     for status in ("active", "inactive"):
         r = c._get(I.PAPER_BASE, "/v2/assets", {"status": status, "asset_class": "us_equity"})
         log(f"أصول {status}: {len(r)}")
         allr += r
-    return assets_frame(allr)
+    raw = pd.DataFrame([{"exchange": a.get("exchange"), "status": a.get("status"),
+                         "plain": (a.get("symbol") or "").isalpha() and len(a.get("symbol") or "") <= 5} for a in allr])
+    stats = raw.groupby(["status", "exchange", "plain"]).size().reset_index(name="n").to_dict("records")
+    log(f"توزيع الأصول الخام: {stats}")
+    return assets_frame(allr, include_otc), stats
 
 
 # ====================================================================== 2) يومي
@@ -201,6 +208,7 @@ def main(argv=None):
     ap.add_argument("--max-price", type=float, default=7.5, help="هامش فوق 5$ حتى لا نفقد أسهماً تعبر الحد")
     ap.add_argument("--steps", default="assets,daily,sec")
     ap.add_argument("--limit", type=int, default=0, help="للتجربة: أول N رمز فقط")
+    ap.add_argument("--no-otc", action="store_true", help="استبعاد الأصول المصنفة OTC حالياً (يفقد مشطوبات انتقلت إلى OTC)")
     a = ap.parse_args(argv)
     steps = set(a.steps.split(","))
     os.makedirs(a.out, exist_ok=True)
@@ -215,7 +223,7 @@ def main(argv=None):
         c = I.AlpacaClient(key, sec, I.Config(max_calls_per_min=int(os.environ.get("RESEARCH_RPM", "100"))))
         c.clock()
     if "assets" in steps:
-        assets = fetch_assets(c)
+        assets, man["raw_assets"] = fetch_assets(c, not a.no_otc)
         if a.limit:
             assets = assets.sort_values("symbol").head(a.limit)
     else:
@@ -231,8 +239,11 @@ def main(argv=None):
         seen: set = set()
         kept = build_daily(c, syms, start, end, a.max_price, tmp, seen)
         st = assets.drop_duplicates("symbol").set_index("symbol")["status"]
-        cover = {k: {"symbols": int((st == k).sum()), "with_bars": int(st[st == k].index.isin(seen).sum()),
-                     "kept": int(st[st == k].index.isin(set(kept)).sum())} for k in ("active", "inactive")}
+        grp = assets.drop_duplicates("symbol").assign(otc=lambda x: x["exchange"] == "OTC")
+        cover = {}
+        for (k, otc), g in grp.groupby(["status", "otc"]):
+            cover[f"{k}{'_otc' if otc else ''}"] = {"symbols": len(g), "with_bars": int(g["symbol"].isin(seen).sum()),
+                                                   "kept": int(g["symbol"].isin(set(kept)).sum())}
         log(f"تغطية حسب الحالة: {cover}")
         spans = write_years(tmp, a.out)
         assets = assets[assets["symbol"].isin(set(kept))].drop(columns=["first_bar", "last_bar"], errors="ignore")

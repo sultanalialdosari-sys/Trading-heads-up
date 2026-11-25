@@ -154,6 +154,9 @@ class TestStore(unittest.TestCase):
         self.assertIn("DEAD", u)                                  # سيُشطب لاحقاً لكنه يتداول الآن
         self.assertEqual(u["DEAD"].status, "active")             # الحالة الحالية لا تتسرب
         self.assertIsNone(u["DEAD"].last_bar)                    # ولا تاريخ الشطب
+        from pit.models import Asset
+        otc = Asset("x", "X", "", "OTC", "active", date(2016, 1, 4), date(2019, 1, 2), None)
+        self.assertEqual(otc.masked(et(date(2018, 1, 2), 10)).exchange, "LISTED")
         self.assertNotIn("NEW", u)
         u2 = {a.symbol for a in self.s.view(et(date(2023, 1, 20), 10)).universe()}
         self.assertNotIn("DEAD", u2)
@@ -232,8 +235,9 @@ class TestBuildHelpers(unittest.TestCase):
             {"id": "3", "symbol": "XYZ.W", "exchange": "NASDAQ", "status": "active"},
             {"id": "4", "symbol": "OTCX", "exchange": "OTC", "status": "active"},
         ])
-        self.assertEqual(sorted(df["asset_id"]), ["1", "2"])
-        self.assertTrue(df["symbol_shared"].all())
+        self.assertEqual(sorted(df["asset_id"]), ["1", "2", "4"])          # OTC الآن قد يكون مشطوباً سابقاً
+        self.assertEqual(sorted(B.assets_frame([{"id": "4", "symbol": "OTCX", "exchange": "OTC", "status": "active"}],
+                                               include_otc=False)["asset_id"]), [])
 
     def test_bars_and_factor(self):
         idx = pd.DatetimeIndex([pd.Timestamp("2023-01-12 05:00", tz="UTC"), pd.Timestamp("2023-01-13 05:00", tz="UTC")])
