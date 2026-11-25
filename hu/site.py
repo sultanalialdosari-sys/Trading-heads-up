@@ -396,7 +396,8 @@ def halts_html(store, cfg: dict, alerts: List[dict], trades: List[dict]) -> str:
         act = h.active(now)
         star = "★ " if h.symbol in mine else ""
         body.append([
-            f"<span class='mono'>{ha.astimezone(I.RIYADH).strftime('%H:%M:%S') if ha else '—'}</span>",
+            f"<span class='mono'>{ha.astimezone(I.RIYADH).strftime('%H:%M:%S' if h.halt_date == day else '%Y-%m-%d %H:%M') if ha else '—'}</span>"
+            + ("" if h.halt_date == day else "<div class='muted' style='font-size:12px'>توقف مستمر منذ أيام</div>"),
             f"<b class='mono'>{star}{E(h.symbol)}</b><div class='muted' style='font-size:12px'>{E(h.name[:40])}</div>",
             f"{E(h.reason_ar)} <span class='muted mono'>({E(h.reason)})</span>",
             "—" if not h.pause_price else f"<span class='mono'>{I.fmt_price(h.pause_price)}</span>",
