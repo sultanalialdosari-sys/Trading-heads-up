@@ -4,9 +4,10 @@
 الخطة المجانية في Alpaca تسمح بصفقات وعروض SIP التاريخية الأقدم من 15 دقيقة (تحققنا منها فعلياً).
 بدل افتراض «سعر التنبيه» أو «افتتاح الدقيقة»، نعيد بناء ما كان سيحدث لأمر حقيقي:
 
-  الشراء (A/BASE): أمر سوق بعد لحظة التنبيه بثانية ← يُنفَّذ بسعر العرض (ask) في أول عرض صالح بعدها.
-  الشراء (B/PRE/POST): أمر وقف-شراء عند مستوى التفعيل ← يتحول لأمر سوق عند أول صفقة ≥ المستوى،
-                       ويُنفَّذ بسعر العرض (ask) في أول عرض بعد تلك الصفقة.
+  الشراء (A/BASE): أمر شراء محدد قابل للتنفيذ بعد لحظة التنبيه بثانية، حدّه = سعر التنبيه + أقصى سبريد (2%)
+                   ← يُنفَّذ بسعر العرض (ask) في أول عرض ≤ الحد خلال دقيقتين، وإلا يُلغى (السعر هرب).
+  الشراء (B/PRE/POST): أمر وقف-شراء بحد عند مستوى التفعيل ← يتفعّل بأول صفقة ≥ المستوى،
+                       ويُنفَّذ بسعر العرض في أول عرض ≤ (المستوى + 2%) خلال دقيقتين، وإلا يُلغى.
   وقف الخسارة: أمر وقف-بيع ← يتحول لأمر سوق عند أول صفقة ≤ الوقف، ويُنفَّذ بسعر الطلب (bid) بعدها
                (فيظهر الانزلاق الحقيقي تحت الوقف بدل افتراض التنفيذ عند الوقف تماماً).
   الهدف: أمر بيع محدد عند الهدف ← يُنفَّذ فقط إذا طُبعت صفقة أعلى من الهدف أو صار الطلب أعلى منه
@@ -105,6 +106,24 @@ def _quotes_after(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, 
     return None
 
 
+BUY_WAIT = timedelta(minutes=2)       # مدة صلاحية أمر الشراء المحدد
+
+
+def _buy_fill(client, sym, at: pd.Timestamp, cut: pd.Timestamp, pool: list, limit: float) -> Optional[tuple]:
+    """أمر شراء محدد «قابل للتنفيذ»: يُنفَّذ بسعر العرض في أول عرض سعره ≤ الحد خلال دقيقتين.
+    يحمي من عروض شاذة أو سبريد منفجر لحظياً (أمر سوق أعمى قد يُنفَّذ أعلى بكثير)."""
+    for q in pool:
+        if q[1] >= at and 0 < q[3] <= limit:
+            return q
+    b = min(at + BUY_WAIT, cut)
+    if b <= at:
+        return None
+    for q in fetch(client, sym, "quotes", _py(at), _py(b), cache_ok=b < cut):
+        if q[1] >= at and 0 < q[3] <= limit:
+            return q
+    return None
+
+
 def sell_fees(price: float, shares: int, fees: dict) -> float:
     """رسوم البيع النظامية فقط (Alpaca بلا عمولة): رسم SEC على قيمة البيع + رسم FINRA TAF لكل سهم."""
     if not price or not shares:
@@ -115,15 +134,15 @@ def sell_fees(price: float, shares: int, fees: dict) -> float:
 
 
 def simulate(t: dict, bars: Optional[pd.DataFrame], cut_utc: datetime, client, slippage_pct: float,
-             target_r: float) -> Optional[dict]:
+             target_r: float, max_spread_pct: float = 2.0) -> Optional[dict]:
     """نفس مخرجات TR.simulate لكن بدقة الثانية. يعيد None إن تعذّر (فيُستخدم محاكي الشموع)."""
     try:
-        return _simulate(t, bars, cut_utc, client, slippage_pct, target_r)
+        return _simulate(t, bars, cut_utc, client, slippage_pct, target_r, max_spread_pct)
     except TickError:
         return None
 
 
-def _simulate(t, bars, cut_utc, client, slip, target_r):
+def _simulate(t, bars, cut_utc, client, slip, target_r, max_spread_pct=2.0):
     sym, kind, stop = t["symbol"], t["kind"], float(t["stop"])
     sh = int(t["shares"])
     created = pd.Timestamp(datetime.fromisoformat(t["created_utc"])).tz_convert("UTC")
@@ -156,7 +175,22 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
         at = created + LATENCY
         if at >= cut:
             return None                              # لم يمر 15 دقيقة بعد — ننتظر
-        q = _quotes_after(client, sym, at, cut, [], "ask")
+        if at + BUY_WAIT > cut:
+            return None                              # ننتظر حتى تكتمل نافذة أمر الشراء
+        ref = float(t.get("entry") or 0) or None
+        if ref is None:
+            q = _quotes_after(client, sym, at, cut, [], "ask")
+        else:
+            limit = round(ref * (1 + max_spread_pct / 100), 4)
+            q = _buy_fill(client, sym, at, cut, [], limit)
+            if q is None:
+                if _quotes_after(client, sym, at, cut, [], "ask") is None:
+                    return None                      # لا عروض إطلاقاً (توقف؟) — نرجع لمحاكي الشموع
+                detail["limit"] = limit
+                return _out(t, "CANCELLED", None, None, None, None, at + BUY_WAIT,
+                            f"أمر الشراء المحدد ({I.fmt_price(limit)}) لم يتنفذ خلال دقيقتين — السعر هرب أو السبريد اتسع",
+                            sh, stop, detail)
+            detail["limit"] = limit
         if q is None:
             return None
         if q[2] > 0:
@@ -205,11 +239,18 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
                     exit_at = e[1]
                     break
                 if e[2] >= t["trigger"]:
-                    q = _quotes_after(client, sym, e[1], cut, qs, "ask")
-                    px = q[3] if q is not None else tick_up(max(e[2], t["trigger"]) * (1 + slip / 100))
-                    at = q[1] if q is not None else e[1]
+                    limit = round(float(t["trigger"]) * (1 + max_spread_pct / 100), 4)   # وقف-شراء بحد أعلى
+                    detail["limit"] = limit
+                    q = _buy_fill(client, sym, e[1], cut, qs, limit)
+                    if q is None:
+                        if e[1] + BUY_WAIT > cut:
+                            return None
+                        status, note, exit_at = "CANCELLED", (f"تفعّل الاختراق لكن أمر الشراء بحد {I.fmt_price(limit)} "
+                                                              "لم يتنفذ خلال دقيقتين — قفز السعر فوقه"), e[1] + BUY_WAIT
+                        break
+                    px, at = q[3], q[1]
                     detail["trigger_print"] = e[2]
-                    if q is not None and q[2] > 0:
+                    if q[2] > 0:
                         detail["entry_spread_pct"] = round((q[3] - q[2]) / q[3] * 100, 2)
                     arm(px, at, "وقف-شراء تفعّل بصفقة ثم تنفيذ بسعر العرض")
                     if status == "CANCELLED":

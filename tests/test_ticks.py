@@ -101,3 +101,22 @@ def test_falls_back_when_ticks_unavailable_and_fees():
     fees = {"sec_per_million": 20.60, "taf_per_share": 0.000195, "taf_max": 9.79}
     assert TK.sell_fees(2.0, 500, fees) == round(1000 * 20.6e-6 + 500 * 0.000195, 2)
     assert TK.sell_fees(2.0, 10_000_000, fees) >= 9.79
+
+
+def test_entry_is_a_marketable_limit_not_a_blind_market_order():
+    # عرض شاذ 2.50 بعد التنبيه مباشرة (سبريد منفجر): لا نشتري به، ننتظر عرضاً ≤ 2.04 (سعر التنبيه + 2%)
+    c = Stub(quotes=[(1.1, 1.99, 2.50), (30, 2.00, 2.03)])
+    r = TK.simulate(trade(), bars([[2.0, 2.02, 1.99, 2.0]]), CUT, c, 0.5, 2.0, 2.0)
+    assert r["entry"] == 2.03 and r["entry_utc"].endswith("16:00:30+00:00")
+    # لم يأتِ أي عرض ضمن الحد خلال دقيقتين ← لا صفقة
+    TK._CACHE.clear()
+    c2 = Stub(quotes=[(1.1, 2.40, 2.50), (100, 2.45, 2.55)])
+    r2 = TK.simulate(trade(), bars([[2.4, 2.6, 2.4, 2.5]]), CUT, c2, 0.5, 2.0, 2.0)
+    assert r2["status"] == "CANCELLED" and r2.get("pnl") is None and "لم يتنفذ" in r2["note"]
+
+
+def test_base_stop_follows_actual_entry():
+    t = trade("BASE", entry=1.00, stop=0.96)                 # وقف 4% تحت الدخول
+    c = Stub(quotes=[(1.1, 0.99, 1.01)])
+    r = TK.simulate(t, bars([[1.0, 1.01, 0.99, 1.0]]), datetime(2026, 11, 20, 17, 0, tzinfo=UTC), c, 0.5, 2.0, 2.0)
+    assert r["entry"] == 1.01 and r["stop"] == 0.9696

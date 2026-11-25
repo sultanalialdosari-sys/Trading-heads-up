@@ -435,7 +435,7 @@ class Engine:
 
     def fill(self, t: dict, bars, cut: datetime) -> dict:
         """تنفيذ الصفقة الورقية: بالثانية من صفقات وعروض SIP إن أمكن، وإلا بشموع الدقيقة (تحفظاً)."""
-        r = TK.simulate(t, bars, cut, self.c, self.cfg["slippage_pct"], self.cfg["target_r"])
+        r = TK.simulate(t, bars, cut, self.c, self.cfg["slippage_pct"], self.cfg["target_r"], self.cfg["max_spread_pct"])
         if r is None:
             r = TR.simulate(t, bars, cut, self.cfg["slippage_pct"], self.cfg["target_r"])
             r["fill_src"] = "bar"
@@ -463,7 +463,8 @@ class Engine:
                 kept += len(grp)
                 continue
             for t in grp.to_dict("records"):
-                r = TK.simulate(t, bars, now - timedelta(minutes=16), self.c, self.cfg["slippage_pct"], self.cfg["target_r"])
+                r = TK.simulate(t, bars, now - timedelta(minutes=16), self.c, self.cfg["slippage_pct"], self.cfg["target_r"],
+                                self.cfg["max_spread_pct"])
                 if r is None:
                     kept += 1
                     continue

@@ -38,7 +38,7 @@ jobs:
                   bars_cache[key] = c.bars([t["symbol"]], "1Min", d0.replace(hour=4).astimezone(UTC), d0.replace(hour=20).astimezone(UTC), feed="sip").get(t["symbol"])
               b = bars_cache[key]
               rb = TR.simulate(t, b, now - timedelta(minutes=16), cfg["slippage_pct"], cfg["target_r"])
-              rt = TK.simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"])
+              rt = TK.simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"], cfg["max_spread_pct"])
               if rt is None:
                   try:
                       why = TK._simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"])
