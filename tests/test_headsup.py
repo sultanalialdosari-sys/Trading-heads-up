@@ -376,3 +376,21 @@ def test_halts_parse_live_feed_sample_with_undeclared_prefix():
     assert (a.market, a.reason, a.halt_date, a.halt_time, a.pause_price, a.resume_trade) == \
         ("Z", "M", "2026-11-24", "09:31:02", None, "09:36:02")
     assert a.name.startswith("Federated") and a.reason_ar == "إيقاف تقلب"
+
+
+def test_trades_filled_by_ticks_with_fees_and_refill(day):
+    st = day[0]
+    tr = [t for t in st.q("SELECT * FROM trades") if t["pnl"] is not None]
+    assert tr and all(t["fill_src"] == "tick" for t in tr)
+    assert all((t["fees"] or 0) > 0 for t in tr)
+    # إعادة الحساب: نعيد صفقة لحالة «الشموع» ثم نعيد حسابها
+    t = tr[0]
+    st.update("trades", t["id"], fill_src="bar", exit=None)
+    w = FakeWorld()
+    w.now = et(TODAY, 16, 40) + timedelta(days=3)
+    c = I.AlpacaClient("K", "S", I.Config(), session=w)
+    c.rl = I.RateLimiter(100000)
+    e = Engine(c, st, CFG, SecClient("T t@example.com", session=w, max_rps=1000), None)
+    res = e.refill(w.now, "2026-11-23")
+    after = st.one("SELECT * FROM trades WHERE id=?", (t["id"],))
+    assert res["refilled"] >= 1 and after["fill_src"] == "tick" and after["exit"] == t["exit"]

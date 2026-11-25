@@ -278,6 +278,7 @@ class AppConfig(_Strict):
         """القاموس المسطح الذي يستخدمه النظام الحي (نفس الشكل القديم)."""
         d = self.live.model_dump()
         d["shares_per_trade"] = self.paper.shares_per_trade
+        d["fees"] = self.costs.fees.model_dump()        # رسوم البيع النظامية في الصفقات الورقية
         return d
 
 

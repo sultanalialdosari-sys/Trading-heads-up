@@ -36,6 +36,23 @@ def t_et(iso):
     return datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%m-%d %H:%M")   # بتوقيت الرياض
 
 
+def t_sec(iso, precise):
+    """وقت الصفقة: بالثانية إن كان التنفيذ محسوباً من صفقات وعروض SIP، وإلا بالدقيقة."""
+    if not iso:
+        return "—"
+    d = datetime.fromisoformat(iso).astimezone(I.RIYADH)
+    return d.strftime("%m-%d %H:%M:%S") if precise else d.strftime("%m-%d %H:%M")
+
+
+def fill_tag(t):
+    src = t.get("fill_src")
+    if src == "tick":
+        return "<span class='tag t-green' title='محسوب من صفقات وعروض السوق الكامل بالثانية'>بالثانية</span>"
+    if src == "bar":
+        return "<span class='tag t-grey' title='تعذّرت بيانات الثانية: محسوب من شموع الدقيقة بافتراضات متحفظة'>بالدقيقة</span>"
+    return "—"
+
+
 def hm_et(iso):
     return "—" if not iso else datetime.fromisoformat(iso).astimezone(I.RIYADH).strftime("%H:%M")
 
@@ -510,13 +527,16 @@ def build(store, out_path: str, cfg: dict) -> None:
             + sum_card("المقارنة: أي سهم قفز حجمه", sBase, GREY) + "</div>")
     trow = []
     for t in trades[:400]:
-        trow.append([E(t["day"]), E(KIND.get(t["kind"], t["kind"])), f"<b class='mono'>{E(t['symbol'])}</b>", t_et(t["entry_utc"] or t["created_utc"]),
+        trow.append([E(t["day"]), E(KIND.get(t["kind"], t["kind"])), f"<b class='mono'>{E(t['symbol'])}</b>", t_sec(t["entry_utc"] or t["created_utc"], t.get("fill_src") == "tick"),
                      I.fmt_price(t["entry"]), I.fmt_price(t["stop"]), I.fmt_price(t["target"]), str(t["shares"]),
-                     E(TSTAT.get(t["status"], t["status"])), I.fmt_price(t["exit"]), t_et(t["exit_utc"]),
+                     E(TSTAT.get(t["status"], t["status"])), I.fmt_price(t["exit"]), t_sec(t["exit_utc"], t.get("fill_src") == "tick"),
                      f"<b class='mono' style='color:{col(t['pnl'])}'>{money(t['pnl'])}</b>", "—" if t["r_mult"] is None else f"{t['r_mult']:+.2f}R",
-                     f"<span class='muted'>{E(t['note'])}</span>"])
-    trade_html = summ + table(["اليوم", "النوع", "السهم", "الدخول (الرياض)", "سعر الدخول", "الوقف", "الهدف", "الكمية", "الحالة",
-                               "الخروج", "وقت الخروج", "الربح", "R", "ملاحظة"], trow)
+                     fill_tag(t), f"<span class='muted'>{E(t['note'])}</span>"])
+    trade_html = summ + ("<p class='muted'>التنفيذ «بالثانية»: الشراء بسعر العرض بعد التنبيه بثانية، والوقف يتفعّل بأول صفقة "
+                         "عند الوقف أو تحته ويُباع بسعر الطلب الفعلي بعدها، والهدف يُحسب فقط إذا تجاوزه السعر. "
+                         "الربح صافٍ بعد رسوم البيع النظامية.</p>") + table(
+        ["اليوم", "النوع", "السهم", "الدخول (الرياض)", "سعر الدخول", "الوقف", "الهدف", "الكمية", "الحالة",
+         "الخروج", "وقت الخروج", "الربح", "R", "الدقة", "ملاحظة"], trow)
 
     mrow = [[E(m["day"]), f"<b class='mono'>{E(m['symbol'])}</b>", I.fmt_price(m["prev_close"]), f"+{m['max_gain_pct']:.0f}%",
              f"{m['close_gain_pct']:+.0f}%", "نعم" if m["was_candidate"] else "لا", "—" if m["best_score"] is None else str(m["best_score"]),

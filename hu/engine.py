@@ -21,6 +21,7 @@ from hu import halts as HL
 from hu import extended as X
 from hu import news as N
 from hu import rules as RL
+from hu import ticks as TK
 from hu import trades as TR
 from hu.sec import SecClient
 from hu.store import Store
@@ -401,9 +402,10 @@ class Engine:
             if s in charted:
                 self.chart_save(day, s, bars.get(s), "follow")
         for t in trades:
-            r = TR.simulate(t, bars.get(t["symbol"]), cut, self.cfg["slippage_pct"], self.cfg["target_r"])
+            r = self.fill(t, bars.get(t["symbol"]), cut)
             upd = {k: v for k, v in r.items() if k in
-                   ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct")}
+                   ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
+                    "fill_src", "fees", "fill_detail")}
             b = bars.get(t["symbol"])
             if b is not None and len(b):
                 seen = b[b.index < pd.Timestamp(cut)]
@@ -428,6 +430,47 @@ class Engine:
                               f"الساعة {et_str(ev['at'])} الرياض قبل أن يخترق.")
             elif ev["state"] == "EXPIRED":
                 self.db.update("alerts", a["id"], state="EXPIRED")
+
+    def fill(self, t: dict, bars, cut: datetime) -> dict:
+        """تنفيذ الصفقة الورقية: بالثانية من صفقات وعروض SIP إن أمكن، وإلا بشموع الدقيقة (تحفظاً)."""
+        r = TK.simulate(t, bars, cut, self.c, self.cfg["slippage_pct"], self.cfg["target_r"])
+        if r is None:
+            r = TR.simulate(t, bars, cut, self.cfg["slippage_pct"], self.cfg["target_r"])
+            r["fill_src"] = "bar"
+        return self.fill_finish(t, r)
+
+    def fill_finish(self, t: dict, r: dict) -> dict:
+        r["fill_detail"] = json.dumps(r.get("fill_detail") or {}, ensure_ascii=False)
+        if r.get("exit") is not None and r.get("entry") and r.get("pnl") is not None:
+            fees = TK.sell_fees(r["exit"], int(t["shares"]), self.cfg.get("fees") or {})
+            r["fees"] = fees
+            r["pnl"] = round(r["pnl"] - fees, 2)          # الربح صافٍ بعد رسوم البيع
+        return r
+
+    def refill(self, now: datetime, before_day: str) -> dict:
+        """إعادة حساب الصفقات الورقية المغلقة للأيام السابقة بدقة الثانية (لتكون السجلات كلها بنفس المعيار).
+        تُستبدل النتيجة فقط إن توفرت بيانات الثانية؛ وإلا تبقى نتيجة الشموع كما هي."""
+        rows = self.db.q("SELECT * FROM trades WHERE day < ? AND COALESCE(fill_src,'') != 'tick' ORDER BY day, symbol", (before_day,))
+        done = kept = 0
+        for (day, sym), grp in pd.DataFrame(rows).groupby(["day", "symbol"]) if rows else []:
+            d0 = datetime.fromisoformat(day).replace(tzinfo=ET)
+            try:
+                bars = self.c.bars([sym], "1Min", (d0.replace(hour=4)).astimezone(UTC), (d0.replace(hour=20)).astimezone(UTC), feed="sip").get(sym)
+            except Exception as e:                    # noqa: BLE001
+                self.errors.append(f"refill {sym} {day}: {e}")
+                kept += len(grp)
+                continue
+            for t in grp.to_dict("records"):
+                r = TK.simulate(t, bars, now - timedelta(minutes=16), self.c, self.cfg["slippage_pct"], self.cfg["target_r"])
+                if r is None:
+                    kept += 1
+                    continue
+                r = self.fill_finish(t, r)
+                self.db.update("trades", t["id"], **{k: v for k, v in r.items() if k in
+                               ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
+                                "fill_src", "fees", "fill_detail")})
+                done += 1
+        return {"refilled": done, "kept_bar": kept}
 
     def load_halts(self, now: datetime, day: str) -> None:
         """توقفات اليوم الرسمية: تُحفظ، وتمنع تنبيه سهم موقوف، وتُرسل تنبيه توقف لأي سهم نتابعه (مرة لكل توقف)."""

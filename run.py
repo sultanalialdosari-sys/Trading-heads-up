@@ -84,6 +84,18 @@ def main(argv) -> int:
             gitdata.publish(BASE, files, "charts backfill")
             gitdata.dispatch_site(BASE)
         return 0
+    if "--refill" in argv:                     # إعادة حساب صفقات الأيام السابقة بدقة الثانية
+        eng = Engine(client, store, cfg, sec, tg)
+        now_et = datetime.now(timezone.utc).astimezone(I.ET)
+        res = eng.refill(datetime.now(timezone.utc), now_et.date().isoformat())
+        store.commit()
+        print("إعادة الحساب:", res, "أخطاء:", eng.errors[:5])
+        site.build(store, os.path.join(DOCS, "index.html"), cfg)
+        store.close()
+        if in_actions:
+            gitdata.publish(BASE, files, "tick refill")
+            gitdata.dispatch_site(BASE)
+        return 0
     eng = Engine(client, store, cfg, sec, tg)
     info = eng.run(kind, sched)
     site.build(store, os.path.join(DOCS, "index.html"), cfg)

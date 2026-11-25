@@ -211,6 +211,27 @@ class FakeWorld:
                 if len(f):
                     out[s] = _bars_json(f)
             return Resp(200, {"bars": out, "next_page_token": None})
+        m_t = re.search(r"/v2/stocks/([A-Z]+)/(trades|quotes)$", url)
+        if m_t:                                   # صفقات/عروض SIP مصطنعة من شموع الدقيقة: o ثم h ثم l ثم c
+            sym, kind = m_t.groups()
+            start = pd.Timestamp(params["start"]).tz_convert(UTC)
+            end = pd.Timestamp(params["end"]).tz_convert(UTC)
+            if not self.sip_allowed or end > pd.Timestamp(self.now - timedelta(minutes=15)):
+                return Resp(403, {"message": "subscription does not permit querying recent SIP data"})
+            f = self._frame(sym, "sip", "1Min", start - timedelta(minutes=1), end)
+            rows = []
+            for t0, r in f.iterrows():
+                for sec, p in ((1, r.open), (20, r.high), (40, r.low), (59, r.close)):
+                    ts = t0 + timedelta(seconds=sec)
+                    if not (start <= ts < end):
+                        continue
+                    z = ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    if kind == "trades":
+                        rows.append({"t": z, "p": round(p, 4), "s": 200, "c": ["@"]})
+                    else:
+                        tq = (ts + timedelta(milliseconds=5)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                        rows.append({"t": tq, "bp": round(p - 0.01, 4), "ap": round(p + 0.01, 4), "bs": 500, "as": 500})
+            return Resp(200, {kind: rows, "next_page_token": None})
         if "/v1beta1/news" in url:
             syms = params.get("symbols", "").split(",")
             n = []
