@@ -1,0 +1,166 @@
+{
+ "generated_utc": "2026-11-23T18:35:31.853285+00:00",
+ "start": "2016-01-01",
+ "train_end_year": 2022,
+ "intraday_v2": {
+  "all": {
+   "train": {
+    "n": 59372,
+    "hit10_before5": 0.0259,
+    "ret_close_mean": 0.0001,
+    "trades": 59270,
+    "avg_R": -0.333,
+    "win_rate": 0.262,
+    "avg_pct": -0.0049
+   },
+   "test": {
+    "n": 47487,
+    "hit10_before5": 0.0292,
+    "ret_close_mean": -0.0004,
+    "trades": 47412,
+    "avg_R": -0.337,
+    "win_rate": 0.269,
+    "avg_pct": -0.0054
+   }
+  },
+  "qualifies": {
+   "train": {
+    "n": 335,
+    "hit10_before5": 0.0328,
+    "ret_close_mean": -0.0015,
+    "trades": 335,
+    "avg_R": -0.366,
+    "win_rate": 0.221,
+    "avg_pct": -0.0079
+   },
+   "test": {
+    "n": 354,
+    "hit10_before5": 0.048,
+    "ret_close_mean": 0.0032,
+    "trades": 354,
+    "avg_R": -0.217,
+    "win_rate": 0.322,
+    "avg_pct": -0.0026
+   }
+  },
+  "score_0_40": {
+   "train": {
+    "n": 27184,
+    "hit10_before5": 0.0239,
+    "ret_close_mean": 0.0003,
+    "trades": 27082,
+    "avg_R": -0.335,
+    "win_rate": 0.263,
+    "avg_pct": -0.0047
+   },
+   "test": {
+    "n": 22497,
+    "hit10_before5": 0.0248,
+    "ret_close_mean": -0.0003,
+    "trades": 22422,
+    "avg_R": -0.338,
+    "win_rate": 0.27,
+    "avg_pct": -0.0052
+   }
+  },
+  "score_40_55": {
+   "train": {
+    "n": 23300,
+    "hit10_before5": 0.0261,
+    "ret_close_mean": -0.0001,
+    "trades": 23300,
+    "avg_R": -0.325,
+    "win_rate": 0.263,
+    "avg_pct": -0.0048
+   },
+   "test": {
+    "n": 18030,
+    "hit10_before5": 0.0309,
+    "ret_close_mean": -0.0003,
+    "trades": 18030,
+    "avg_R": -0.334,
+    "win_rate": 0.271,
+    "avg_pct": -0.0053
+   }
+  },
+  "score_55_65": {
+   "train": {
+    "n": 7238,
+    "hit10_before5": 0.0298,
+    "ret_close_mean": -0.0005,
+    "trades": 7238,
+    "avg_R": -0.356,
+    "win_rate": 0.252,
+    "avg_pct": -0.0057
+   },
+   "test": {
+    "n": 5594,
+    "hit10_before5": 0.0349,
+    "ret_close_mean": -0.0019,
+    "trades": 5594,
+    "avg_R": -0.361,
+    "win_rate": 0.258,
+    "avg_pct": -0.0066
+   }
+  },
+  "score_65_75": {
+   "train": {
+    "n": 1488,
+    "hit10_before5": 0.0383,
+    "ret_close_mean": 0.0,
+    "trades": 1488,
+    "avg_R": -0.318,
+    "win_rate": 0.263,
+    "avg_pct": -0.0053
+   },
+   "test": {
+    "n": 1198,
+    "hit10_before5": 0.0534,
+    "ret_close_mean": 0.001,
+    "trades": 1198,
+    "avg_R": -0.277,
+    "win_rate": 0.285,
+    "avg_pct": -0.0047
+   }
+  },
+  "score_75_101": {
+   "train": {
+    "n": 162,
+    "hit10_before5": 0.0432,
+    "ret_close_mean": -0.0025,
+    "trades": 162,
+    "avg_R": -0.318,
+    "win_rate": 0.29,
+    "avg_pct": -0.0058
+   },
+   "test": {
+    "n": 168,
+    "hit10_before5": 0.0536,
+    "ret_close_mean": 0.0001,
+    "trades": 168,
+    "avg_R": -0.108,
+    "win_rate": 0.333,
+    "avg_pct": 0.0004
+   }
+  }
+ },
+ "intraday_rows_v2": 106859,
+ "api_calls": 11827,
+ "minutes": 118.5,
+ "log": [
+  "إعادة الأحداث السابقة مع طرق خروج وأخبار: 5904",
+  "  داخل اليوم: 0/5904 • صفوف 20 • 1 ث",
+  "  داخل اليوم: 500/5904 • صفوف 9089 • 603 ث",
+  "  داخل اليوم: 1000/5904 • صفوف 17997 • 1204 ث",
+  "  داخل اليوم: 1500/5904 • صفوف 27026 • 1805 ث",
+  "  داخل اليوم: 2000/5904 • صفوف 36158 • 2409 ث",
+  "event-err nan 2026-05-08 TypeError sequence item 0: expected str instance, float found",
+  "  داخل اليوم: 2500/5904 • صفوف 45278 • 3010 ث",
+  "  داخل اليوم: 3000/5904 • صفوف 54319 • 3614 ث",
+  "  داخل اليوم: 3500/5904 • صفوف 63422 • 4215 ث",
+  "  داخل اليوم: 4000/5904 • صفوف 72508 • 4817 ث",
+  "  داخل اليوم: 4500/5904 • صفوف 81581 • 5418 ث",
+  "  داخل اليوم: 5000/5904 • صفوف 90634 • 6019 ث",
+  "  داخل اليوم: 5500/5904 • صفوف 99595 • 6620 ث"
+ ]
+}
