@@ -40,7 +40,12 @@ jobs:
               rb = TR.simulate(t, b, now - timedelta(minutes=16), cfg["slippage_pct"], cfg["target_r"])
               rt = TK.simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"])
               if rt is None:
-                  print(t["day"], t["kind"], t["symbol"], "tick unavailable"); continue
+                  try:
+                      why = TK._simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"])
+                      why = "no valid quote after entry" if why is None else why
+                  except Exception as e:
+                      why = repr(e)[:300]
+                  print(t["day"], t["kind"], t["symbol"], "created", t["created_utc"], "tick unavailable:", why); continue
               f = lambda r: f"{r['status']:9} {I.fmt_price(r.get('entry')):>7} {I.fmt_price(r.get('exit')):>7} {r.get('pnl') if r.get('pnl') is not None else '—':>8}"
               tm = lambda x: "—" if not x else datetime.fromisoformat(x).astimezone(ET).strftime("%H:%M:%S")
               print(f"{t['day']:10} {t['kind']:4} {t['symbol']:6} | {f(rb):32} | {f(rt):32} | {tm(rt.get('entry_utc'))} → {tm(rt.get('exit_utc'))}")

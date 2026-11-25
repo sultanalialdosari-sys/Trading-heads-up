@@ -25,7 +25,7 @@ import pandas as pd
 
 import intraday as I
 from hu import trades as TR
-from hu.rules import tick_up
+from hu.rules import tick_down, tick_up
 
 LATENCY = timedelta(seconds=1)       # من قرار التنبيه إلى وصول الأمر
 QUOTE_WAIT = timedelta(seconds=90)   # أقصى انتظار لعرض صالح
@@ -136,9 +136,14 @@ def _simulate(t, bars, cut_utc, client, slip, target_r):
     note = ""
     detail: Dict[str, object] = {}
 
+    # المقارنة BASE: الوقف نسبة مئوية من سعر الدخول (لا مستوى فني) — تُطبق على سعر الدخول الفعلي
+    base_pct = ((float(t["entry"]) - stop) / float(t["entry"])) if kind == "BASE" and t.get("entry") else None
+
     def arm(px_ask: float, at: pd.Timestamp, why: str):
-        nonlocal entry, entry_at, target, status, note
+        nonlocal entry, entry_at, target, status, note, stop
         entry, entry_at = round(px_ask, 4), at
+        if base_pct is not None:
+            stop = tick_down(entry * (1 - base_pct))
         if entry <= stop:
             status, note = "CANCELLED", "سعر التنفيذ الفعلي كان عند الوقف أو تحته — لا صفقة"
             return
@@ -248,7 +253,7 @@ def _iso(x: Optional[pd.Timestamp]) -> Optional[str]:
 
 def _out(t, status, entry, entry_at, target, exit_px, exit_at, note, sh, stop, detail) -> dict:
     out = {"status": status, "entry": entry, "entry_utc": _iso(entry_at) if entry is not None else t.get("entry_utc"),
-           "target": target, "note": note, "exit": exit_px, "exit_utc": _iso(exit_at), "fill_src": "tick",
+           "stop": stop, "target": target, "note": note, "exit": exit_px, "exit_utc": _iso(exit_at), "fill_src": "tick",
            "fill_detail": detail}
     if exit_px is not None and entry:
         out["pnl"] = round((exit_px - entry) * sh, 2)

@@ -325,8 +325,9 @@ class Engine:
             entry = RL.tick_up(pc.ask if pc.ask and pc.spread_pct is not None and pc.spread_pct < 5 else px * (1 + self.cfg["slippage_pct"] / 100))
             stop_pct = self.median_stop_pct(day)
             stop = RL.tick_down(entry * (1 - stop_pct / 100))
-            self.db.insert("trades", {"kind": "BASE", "day": day, "symbol": r.symbol, "created_utc": now.isoformat(),
-                                      "ref_price": px, "entry_utc": now.isoformat(), "entry": entry, "stop": stop,
+            at = max(now, self.c.now_utc())   # لحظة القرار الفعلية
+            self.db.insert("trades", {"kind": "BASE", "day": day, "symbol": r.symbol, "created_utc": at.isoformat(),
+                                      "ref_price": px, "entry_utc": at.isoformat(), "entry": entry, "stop": stop,
                                       "target": RL.tick_up(entry + self.cfg["target_r"] * (entry - stop)),
                                       "shares": self.cfg["shares_per_trade"], "status": "OPEN",
                                       "note": f"حجم قفز {r.vol_jump:.1f}× — وقف {stop_pct:.1f}%"})
@@ -360,6 +361,7 @@ class Engine:
             return False
         msg = alert_text(st, "بيانات السوق الكامل متأخرة 15 دقيقة، والسعر اللحظي من IEX فقط\n🧮 " + st.data_note)
         sent = self.send(msg)
+        now = max(now, self.c.now_utc())      # لحظة الإرسال الفعلية (المسح والتحليل يأخذان وقتاً بعد بداية الدورة)
         aid = self.db.insert("alerts", {"day": day, "symbol": st.symbol, "run_id": run_id, "alert_utc": now.isoformat(),
                                         "kind": "EARLY", "score": st.score, "price": st.price, "trigger": st.trigger,
                                         "invalidation": st.invalidation, "data_quality": st.data_quality,
@@ -404,7 +406,7 @@ class Engine:
         for t in trades:
             r = self.fill(t, bars.get(t["symbol"]), cut)
             upd = {k: v for k, v in r.items() if k in
-                   ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
+                   ("status", "entry", "entry_utc", "stop", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
                     "fill_src", "fees", "fill_detail")}
             b = bars.get(t["symbol"])
             if b is not None and len(b):
@@ -467,7 +469,7 @@ class Engine:
                     continue
                 r = self.fill_finish(t, r)
                 self.db.update("trades", t["id"], **{k: v for k, v in r.items() if k in
-                               ("status", "entry", "entry_utc", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
+                               ("status", "entry", "entry_utc", "stop", "target", "note", "exit", "exit_utc", "pnl", "r_mult", "pct",
                                 "fill_src", "fees", "fill_detail")})
                 done += 1
         return {"refilled": done, "kept_bar": kept}
