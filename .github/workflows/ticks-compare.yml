@@ -1,0 +1,52 @@
+name: ticks-compare
+# مقارنة للقراءة فقط: يعيد حساب الصفقات الورقية السابقة بدقة الثانية ويقارنها بنتيجة الشموع. لا يحفظ شيئاً.
+on: workflow_dispatch
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -r requirements.txt
+      - run: |
+          python - <<'PY'
+          import os, sys, json
+          from datetime import datetime, timedelta, timezone
+          sys.path.insert(0, ".")
+          import intraday as I
+          from hu import gitdata, ticks as TK, trades as TR
+          from hu.engine import load_cfg, ET, UTC
+          from hu.store import Store
+          gitdata.restore(".", {"headsup.db": "/tmp/h.db"})
+          st = Store("/tmp/h.db"); cfg = load_cfg("config.json")
+          c = I.AlpacaClient(os.environ["ALPACA_API_KEY"], os.environ["ALPACA_API_SECRET"], I.Config())
+          today = datetime.now(timezone.utc).astimezone(ET).date().isoformat()
+          now = datetime.now(timezone.utc)
+          rows = st.q("SELECT * FROM trades WHERE day < ? ORDER BY day, id", (today,))
+          tot_b = tot_t = 0.0; n = diff = 0; bars_cache = {}
+          print(f"{'day':10} {'kind':4} {'sym':6} | {'bar: st entry exit pnl':32} | {'tick: st entry exit pnl':32} | entry/exit time (ET)")
+          for t in rows:
+              key = (t["day"], t["symbol"])
+              if key not in bars_cache:
+                  d0 = datetime.fromisoformat(t["day"]).replace(tzinfo=ET)
+                  bars_cache[key] = c.bars([t["symbol"]], "1Min", d0.replace(hour=4).astimezone(UTC), d0.replace(hour=20).astimezone(UTC), feed="sip").get(t["symbol"])
+              b = bars_cache[key]
+              rb = TR.simulate(t, b, now - timedelta(minutes=16), cfg["slippage_pct"], cfg["target_r"])
+              rt = TK.simulate(t, b, now - timedelta(minutes=16), c, cfg["slippage_pct"], cfg["target_r"])
+              if rt is None:
+                  print(t["day"], t["kind"], t["symbol"], "tick unavailable"); continue
+              f = lambda r: f"{r['status']:9} {I.fmt_price(r.get('entry')):>7} {I.fmt_price(r.get('exit')):>7} {r.get('pnl') if r.get('pnl') is not None else '—':>8}"
+              tm = lambda x: "—" if not x else datetime.fromisoformat(x).astimezone(ET).strftime("%H:%M:%S")
+              print(f"{t['day']:10} {t['kind']:4} {t['symbol']:6} | {f(rb):32} | {f(rt):32} | {tm(rt.get('entry_utc'))} → {tm(rt.get('exit_utc'))}")
+              if rt.get("note"): print("      ", rt["note"], json.dumps(rt.get("fill_detail"), ensure_ascii=False))
+              if rb.get("pnl") is not None and rt.get("pnl") is not None:
+                  n += 1; tot_b += rb["pnl"]; tot_t += rt["pnl"] - TK.sell_fees(rt["exit"], int(t["shares"]), cfg["fees"])
+                  diff += rb["status"] != rt["status"]
+          print(f"\nصفقات مقارنة: {n} • اختلاف الحالة: {diff} • مجموع الشموع {tot_b:+.2f}$ • مجموع الثانية (بعد الرسوم) {tot_t:+.2f}$")
+          PY
