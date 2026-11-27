@@ -449,6 +449,8 @@ class Engine:
         return self.fill_finish(t, r)
 
     def fill_finish(self, t: dict, r: dict) -> dict:
+        for k in ("exit", "exit_utc", "pnl", "r_mult", "pct", "fees"):   # صفقة أُلغيت لا تحتفظ بأرقام قديمة
+            r.setdefault(k, None)
         r["fill_detail"] = json.dumps(r.get("fill_detail") or {}, ensure_ascii=False)
         if r.get("exit") is not None and r.get("entry") and r.get("pnl") is not None:
             fees = TK.sell_fees(r["exit"], int(t["shares"]), self.cfg.get("fees") or {})
@@ -464,7 +466,8 @@ class Engine:
         for (day, sym), grp in pd.DataFrame(rows).groupby(["day", "symbol"]) if rows else []:
             d0 = datetime.fromisoformat(day).replace(tzinfo=ET)
             try:
-                bars = self.c.bars([sym], "1Min", (d0.replace(hour=4)).astimezone(UTC), (d0.replace(hour=20)).astimezone(UTC), feed="sip").get(sym)
+                end = min(d0.replace(hour=20).astimezone(UTC), now - timedelta(minutes=16))   # الخطة المجانية: SIP أقدم من 15 دقيقة فقط
+                bars = self.c.bars([sym], "1Min", (d0.replace(hour=4)).astimezone(UTC), end, feed="sip").get(sym)
             except Exception as e:                    # noqa: BLE001
                 self.errors.append(f"refill {sym} {day}: {e}")
                 kept += len(grp)

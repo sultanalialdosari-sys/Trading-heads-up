@@ -60,6 +60,9 @@ class Store:
         for c, typ in (("last_px", "REAL"), ("last_utc", "TEXT"), ("fill_src", "TEXT"), ("fees", "REAL"), ("fill_detail", "TEXT")):   # آخر سعر تابعه النظام (للربح غير المحقق)
             if c not in tcols:
                 self.db.execute(f"ALTER TABLE trades ADD COLUMN {c} {typ}")
+        # تنظيف: صفقات أُلغيت أو انتهت بلا تنفيذ لا يجوز أن تحمل ربحاً/خسارة من حساب سابق
+        self.db.execute("UPDATE trades SET exit=NULL, exit_utc=NULL, pnl=NULL, r_mult=NULL, pct=NULL, fees=NULL "
+                        "WHERE status IN ('CANCELLED','EXPIRED') AND pnl IS NOT NULL")
 
     def q(self, sql: str, args=()) -> list:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]
