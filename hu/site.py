@@ -45,6 +45,39 @@ def t_sec(iso, precise):
     return TF.dh12(d, seconds=precise)
 
 
+H5_FROM = "2026-11-27T17:29:41"   # وقت تسجيل الفرضية H5 — التقييم الرسمي على ما بعده فقط
+
+
+def h5_html(trades) -> str:
+    """متابعة الفرضية المسجلة H5: تنبيهات هادئة مقابل ساخنة مقابل الدخول العشوائي (للمراقبة — الحكم مرة واحدة)."""
+    def grp(rows):
+        r = [t["r_mult"] for t in rows if t["r_mult"] is not None]
+        if not r:
+            return "<td>0</td><td>—</td><td>—</td><td>—</td>"
+        pnl = sum(t["pnl"] or 0 for t in rows if t["r_mult"] is not None)
+        m = sum(r) / len(r)
+        return (f"<td>{len(r)}</td><td class='mono' style='color:{col(m)}'>{m:+.2f}R</td>"
+                f"<td>{sum(x > 0 for x in r) / len(r):.0%}</td><td class='mono' style='color:{col(pnl)}'>{money(pnl)}</td>")
+    post = [t for t in trades if (t["created_utc"] or "") >= H5_FROM]
+    pre = [t for t in trades if (t["created_utc"] or "") < H5_FROM]
+    days = len({t["day"] for t in post if t["r_mult"] is not None})
+    calm_n = sum(1 for t in post if t["kind"] in ("A", "B") and t.get("calm") == 1 and t["r_mult"] is not None)
+    def rows(src):
+        ab = [t for t in src if t["kind"] in ("A", "B")]
+        return (f"<tr><td>هادئة (السهم لم ينفجر قبل التنبيه)</td>{grp([t for t in ab if t.get('calm') == 1])}</tr>"
+                f"<tr><td>ساخنة</td>{grp([t for t in ab if t.get('calm') == 0])}</tr>"
+                f"<tr><td>المقارنة العشوائية</td>{grp([t for t in src if t['kind'] == 'BASE'])}</tr>")
+    head = "<tr><th>المجموعة</th><th>صفقات</th><th>متوسط R</th><th>نسبة الربح</th><th>المجموع</th></tr>"
+    return (f"<div class='card'><h3>الفرضية H5 — هل التنبيهات «الهادئة» أفضل؟ (مسجلة مسبقاً)</h3>"
+            "<p class='muted'>هادئة = حجم اليوم ≤ 1.61× المعتاد، وأكبر قفزة حجم ≤ 8.71×، والارتفاع من إغلاق الأمس ≤ 7.34%. "
+            "الحدود مقفلة ولا تُعدّل. التنفيذ نفسه لم يتغير — هذا وسم للمقارنة فقط.</p>"
+            f"<p><b>التقدم نحو الحكم:</b> {days}/40 يوم تداول • {calm_n}/100 صفقة هادئة. "
+            "الأرقام هنا للمتابعة؛ الحكم مرة واحدة عند اكتمال الشرطين.</p>"
+            f"<div class='tw'><table>{head}{rows(post)}</table></div>"
+            f"<details><summary class='muted'>قبل التسجيل (استكشافي — منه جاءت الحدود، فلا يُعتبر دليلاً)</summary>"
+            f"<div class='tw'><table>{head}{rows(pre)}</table></div></details></div>")
+
+
 def fill_tag(t):
     src = t.get("fill_src")
     if src == "tick":
@@ -524,7 +557,7 @@ def build(store, out_path: str, cfg: dict) -> None:
     alert_html = table(["اليوم", "الوقت (الرياض)", "السهم", "الدرجة", "السعر", "شرط الدخول", "الإبطال", "الحالة",
                         "السبق قبل الاختراق", "التغير عند التنبيه", "جودة البيانات", "أُرسل"], arow)
 
-    summ = ("<div class='grid3'>" + sum_card("A: الدخول عند التنبيه", sA, GREEN) + sum_card("B: الدخول عند الاختراق", sB, BLUE)
+    summ = h5_html(trades) + ("<div class='grid3'>" + sum_card("A: الدخول عند التنبيه", sA, GREEN) + sum_card("B: الدخول عند الاختراق", sB, BLUE)
             + sum_card("المقارنة: أي سهم قفز حجمه", sBase, GREY) + "</div>")
     trow = []
     for t in trades[:400]:

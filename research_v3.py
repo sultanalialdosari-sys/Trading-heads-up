@@ -269,7 +269,7 @@ def main(argv=None):
     os.makedirs(a.out, exist_ok=True)
     app = C.load(os.path.join(BASE, "config.json"))
     reg = Registry(a.registry)
-    hyps = {k: v for k, v in reg.hypotheses().items() if k.startswith("H")}
+    hyps = {k: v for k, v in reg.hypotheses().items() if k.startswith("H") and "trigger" in v["params"]}   # فرضيات الدراسة التاريخية فقط (H5 أمامية حية)
     cfg_hash = research_config_hash(app)
     stale = [k for k, v in hyps.items() if v.get("config_hash") != cfg_hash]
     if stale:
