@@ -78,6 +78,7 @@
   },
   "paper": {
     "shares_per_trade": 500,
-    "live_orders": false
+    "live_orders": false,
+    "extended_trades": false
   }
 }

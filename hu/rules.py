@@ -339,3 +339,22 @@ def finalize(st: Setup, iex_share: Optional[float], sip_ok: bool) -> None:
 
 def quality_label(q: int) -> str:
     return "جيدة" if q >= 80 else "متوسطة" if q >= 55 else "ضعيفة"
+
+
+# فرضية H5 (مسجلة مسبقاً في research/hypotheses.jsonl — لا تُعدّل؛ أي تعديل = فرضية جديدة باسم جديد):
+# التنبيه «هادئ» إذا لم ينفجر السهم قبله: حجم اليوم ≤ 1.61× متوسط اليوم الكامل، وأكبر قفزة حجم ≤ 8.71×،
+# والارتفاع من إغلاق الأمس ≤ 7.34%.
+CALM_H5 = {"vol_vs_avg_max": 1.61, "spike_max": 8.71, "day_change_max": 7.34}
+
+
+def calm_h5(d: dict):
+    """1 = هادئ، 0 = ساخن، None = بيانات ناقصة. d = بيانات التنبيه (to_dict)."""
+    try:
+        v, sp, ch = d.get("vol_vs_avg"), d.get("spike"), d.get("day_change_pct")
+        if v is None or sp is None or ch is None:
+            return None
+        return int(float(v) <= CALM_H5["vol_vs_avg_max"] and float(sp) <= CALM_H5["spike_max"]
+                   and float(ch) <= CALM_H5["day_change_max"])
+    except (TypeError, ValueError):
+        return None
+

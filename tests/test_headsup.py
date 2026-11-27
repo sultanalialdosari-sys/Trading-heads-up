@@ -21,14 +21,15 @@ from hu.store import Store  # noqa: E402
 
 UTC = timezone.utc
 CFG = load_cfg(os.path.join(os.path.dirname(HERE), "config.json"))
+EXT = {**CFG, "extended_trades": True}      # صفقات قوائم ما قبل/بعد الجلسة (موقوفة افتراضياً)
 
 
-def run_at(w, st, hm, kind="scan", sec_ua="Test t@example.com"):  # noqa
+def run_at(w, st, hm, kind="scan", sec_ua="Test t@example.com", cfg=None):  # noqa
     w.now = et(TODAY, *hm)
     w.tg.clear()
     c = I.AlpacaClient("KEY_SHOULD_NOT_LEAK", "SECRET_SHOULD_NOT_LEAK", I.Config(), session=w)
     c.rl = I.RateLimiter(100000)
-    e = Engine(c, st, CFG, SecClient(sec_ua, session=w, max_rps=1000), I.TelegramNotifier("TGTOKEN_SECRET", "1", session=w))
+    e = Engine(c, st, cfg or CFG, SecClient(sec_ua, session=w, max_rps=1000), I.TelegramNotifier("TGTOKEN_SECRET", "1", session=w))
     return e.run(kind), list(w.tg)
 
 
@@ -218,7 +219,7 @@ def test_session_start_no_alert_and_schedule():
 def test_premarket_watchlist_alert_and_session_outcome():
     st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
     w = FakeWorld()
-    info, tg = run_at(w, st, (9, 2), kind="pre")
+    info, tg = run_at(w, st, (9, 2), kind="pre", cfg=EXT)
     pre = st.q("SELECT * FROM alerts WHERE kind='PRE'")
     assert [a["symbol"] for a in pre] == ["PREM"], (info, pre)
     a = pre[0]
@@ -238,7 +239,7 @@ def test_premarket_watchlist_alert_and_session_outcome():
 def test_afterhours_watchlist_targets_next_session():
     st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
     w = FakeWorld()
-    info, tg = run_at(w, st, (17, 2), kind="post")
+    info, tg = run_at(w, st, (17, 2), kind="post", cfg=EXT)
     post = st.q("SELECT * FROM alerts WHERE kind='POST'")
     assert [a["symbol"] for a in post] == ["AFTR"], info
     assert post[0]["day"] == "2026-11-23" and post[0]["eval_from"].startswith("2026-11-23T14:30")
@@ -382,6 +383,8 @@ def test_trades_filled_by_ticks_with_fees_and_refill(day):
     st = day[0]
     tr = [t for t in st.q("SELECT * FROM trades") if t["pnl"] is not None]
     assert tr and all(t["fill_src"] == "tick" for t in tr)
+    ab = st.q("SELECT calm FROM trades WHERE kind IN ('A','B')")
+    assert ab and all(r["calm"] in (0, 1) for r in ab)          # وسم H5 محفوظ مع كل صفقة تنبيه
     assert all((t["fees"] or 0) > 0 for t in tr)
     # إعادة الحساب: نعيد صفقة لحالة «الشموع» ثم نعيد حسابها
     t = tr[0]
@@ -394,3 +397,15 @@ def test_trades_filled_by_ticks_with_fees_and_refill(day):
     res = e.refill(w.now, "2026-11-23")
     after = st.one("SELECT * FROM trades WHERE id=?", (t["id"],))
     assert res["refilled"] >= 1 and after["fill_src"] == "tick" and after["exit"] == t["exit"]
+
+
+
+def test_extended_trades_off_by_default_and_calm_tag():
+    st = Store(os.path.join(tempfile.mkdtemp(), "h.db"))
+    w = FakeWorld()
+    run_at(w, st, (17, 2), kind="post")
+    assert st.q("SELECT * FROM alerts WHERE kind='POST'") and not st.q("SELECT * FROM trades WHERE kind='POST'")
+    from hu.rules import calm_h5
+    assert calm_h5({"vol_vs_avg": 1.0, "spike": 5, "day_change_pct": 3}) == 1
+    assert calm_h5({"vol_vs_avg": 2.0, "spike": 5, "day_change_pct": 3}) == 0
+    assert calm_h5({"vol_vs_avg": 1.0, "spike": None, "day_change_pct": 3}) is None

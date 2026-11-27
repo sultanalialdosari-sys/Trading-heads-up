@@ -375,6 +375,7 @@ class Engine:
                                         "gain_from_open": st.day_change_pct, "state": "OPEN", "sent": int(sent),
                                         "message": msg, "data": st.to_dict()})
         sh = int(self.cfg["shares_per_trade"])
+        calm = RL.calm_h5(st.to_dict())               # وسم H5 (هادئ/ساخن) — لا يغيّر التنفيذ
         entry = st.ask if (st.ask and st.spread_pct is not None and st.spread_pct <= self.cfg["max_spread_pct"]) \
             else st.price * (1 + self.cfg["slippage_pct"] / 100)
         entry = RL.tick_up(entry)
@@ -382,10 +383,10 @@ class Engine:
             self.db.insert("trades", {"alert_id": aid, "kind": "A", "day": day, "symbol": st.symbol, "created_utc": now.isoformat(),
                                       "ref_price": st.price, "trigger": st.trigger, "entry_utc": now.isoformat(), "entry": entry,
                                       "stop": st.invalidation, "target": RL.tick_up(entry + self.cfg["target_r"] * (entry - st.invalidation)),
-                                      "shares": sh, "status": "OPEN", "note": "دخول عند التنبيه"})
+                                      "shares": sh, "status": "OPEN", "note": "دخول عند التنبيه", "calm": calm})
         self.db.insert("trades", {"alert_id": aid, "kind": "B", "day": day, "symbol": st.symbol, "created_utc": now.isoformat(),
                                   "ref_price": st.price, "trigger": st.trigger, "stop": st.invalidation, "shares": sh,
-                                  "status": "PENDING", "note": "أمر معلّق فوق مستوى التفعيل"})
+                                  "status": "PENDING", "note": "أمر معلّق فوق مستوى التفعيل", "calm": calm})
         return True
 
     # ---------------------------------------------------------------- follow-up
@@ -566,7 +567,9 @@ class Engine:
                 "data_quality": st.data_quality, "gain_from_open": st.change_pct, "state": "OPEN", "sent": int(sent),
                 "message": msg, "data": st.to_dict(), "eval_from": eval_from.isoformat() if eval_from else None})
             info["alerts"] += 1
-            # صفقة افتراضية: أمر معلّق عند قمة الفترة يبدأ من افتتاح الجلسة
+            # صفقة افتراضية (موقوفة افتراضياً منذ 27 نوفمبر: 12 صفقة، ربح واحد، −1,088$) — التنبيه يبقى للمراقبة
+            if not self.cfg.get("extended_trades", False):
+                continue
             self.db.insert("trades", {"alert_id": aid, "kind": phase, "day": eval_day, "symbol": st.symbol,
                                       "created_utc": (eval_from or now).isoformat(), "ref_price": st.price,
                                       "trigger": st.trigger, "stop": st.invalidation, "shares": int(self.cfg["shares_per_trade"]),

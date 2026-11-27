@@ -57,9 +57,18 @@ class Store:
         if "refill" not in cols:
             self.db.execute("ALTER TABLE runs ADD COLUMN refill TEXT")
         tcols = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
-        for c, typ in (("last_px", "REAL"), ("last_utc", "TEXT"), ("fill_src", "TEXT"), ("fees", "REAL"), ("fill_detail", "TEXT")):   # آخر سعر تابعه النظام (للربح غير المحقق)
+        for c, typ in (("last_px", "REAL"), ("last_utc", "TEXT"), ("fill_src", "TEXT"), ("fees", "REAL"), ("fill_detail", "TEXT"), ("calm", "INTEGER")):   # آخر سعر تابعه النظام (للربح غير المحقق)
             if c not in tcols:
                 self.db.execute(f"ALTER TABLE trades ADD COLUMN {c} {typ}")
+        # وسم H5 للصفقات القديمة (استكشافي فقط — التقييم الرسمي يبدأ من وقت التسجيل)
+        if "calm" not in tcols:
+            from hu.rules import calm_h5
+            for r in self.db.execute("SELECT t.id, a.data FROM trades t JOIN alerts a ON a.id=t.alert_id "
+                                     "WHERE t.kind IN ('A','B')").fetchall():
+                try:
+                    self.db.execute("UPDATE trades SET calm=? WHERE id=?", (calm_h5(json.loads(r[1] or "{}")), r[0]))
+                except ValueError:
+                    pass
         # تنظيف: صفقات أُلغيت أو انتهت بلا تنفيذ لا يجوز أن تحمل ربحاً/خسارة من حساب سابق
         self.db.execute("UPDATE trades SET exit=NULL, exit_utc=NULL, pnl=NULL, r_mult=NULL, pct=NULL, fees=NULL "
                         "WHERE status IN ('CANCELLED','EXPIRED') AND pnl IS NOT NULL")

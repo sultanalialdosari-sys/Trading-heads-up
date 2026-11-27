@@ -260,6 +260,7 @@ class Validation(_Strict):
 class Paper(_Strict):
     shares_per_trade: int = Field(RL.DEFAULTS["shares_per_trade"], ge=1)
     live_orders: Literal[False] = False
+    extended_trades: bool = False          # صفقات ورقية لقوائم ما قبل الافتتاح وما بعد الإغلاق
 
 
 class AppConfig(_Strict):
@@ -278,6 +279,7 @@ class AppConfig(_Strict):
         """القاموس المسطح الذي يستخدمه النظام الحي (نفس الشكل القديم)."""
         d = self.live.model_dump()
         d["shares_per_trade"] = self.paper.shares_per_trade
+        d["extended_trades"] = self.paper.extended_trades
         d["fees"] = self.costs.fees.model_dump()        # رسوم البيع النظامية في الصفقات الورقية
         return d
 
